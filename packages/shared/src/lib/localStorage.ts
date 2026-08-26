@@ -231,6 +231,7 @@ export async function saveTestResult(result: {
   answers?: Record<string, string>;
 }): Promise<TestResult> {
   return withTimeout((async () => {
+    // 1-жол: submit_test_result RPC (SQL 05 орнатылғанда — қауіпсіз, серверлік тексеру)
     const { data, error } = await supabase.rpc('submit_test_result', {
       p_student_id: result.student_id,
       p_variant_id: result.variant_id,
@@ -238,7 +239,23 @@ export async function saveTestResult(result: {
       p_total_score: result.total_score,
       p_answers: result.answers || null,
     });
-    if (error) throw error;
+    if (error) {
+      // RPC жоқ болса (SQL әлі орнатылмаған) — тікелей insert (fallback)
+      const isMissingRpc = error.code === 'PGRST202' || /could not find the function/i.test(error.message || '');
+      if (!isMissingRpc) throw error;
+      const { data: insertData, error: insertError } = await supabase
+        .from('results')
+        .insert({
+          student_id: result.student_id,
+          variant_id: result.variant_id,
+          score: result.score,
+          total_score: result.total_score,
+        })
+        .select()
+        .single();
+      if (insertError) throw insertError;
+      return insertData as TestResult;
+    }
     return data?.[0] as TestResult;
   })());
 }

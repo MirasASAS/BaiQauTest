@@ -1,9 +1,13 @@
 import type { ParsedQuestion, ProcessedQuestion, AIResponseEnvelope, AIQuestionResult, AIOptions } from './types';
 import { supabase } from '@baiqautest/shared';
+import { callOpenAICompatible } from '../ai/openaiCompat';
 
-// AI-ключтер серверде (Supabase Edge Function ai-import). Клиентте тек рөл тексеріледі.
+const DS_BASE_URL = import.meta.env.VITE_DEEPSEEK_BASE_URL || 'https://api.b.ai/v1';
+const DS_MODEL = import.meta.env.VITE_DEEPSEEK_MODEL || 'deepseek-v4-flash-vision-exp';
+const DS_API_KEY = import.meta.env.VITE_DEEPSEEK_API_KEY || '';
+
 export function isDeepSeekConfigured(): boolean {
-  return true;
+  return !!DS_API_KEY;
 }
 
 const DEEPSEEK_SYSTEM_PROMPT = `You are a test-question extraction and translation engine for ЕНТ/ҰБТ.
@@ -50,19 +54,40 @@ export class DeepSeekAIProvider {
       })),
     });
 
-    const { data, error } = await supabase.functions.invoke('ai-import', {
-      body: {
-        provider: 'deepseek',
-        systemPrompt: DEEPSEEK_SYSTEM_PROMPT,
-        userPrompt,
-        temperature: 0.2,
-        maxTokens: 4096,
-      },
-    });
-    if (error) throw new Error(error.message);
-    if (!data?.text) throw new Error(data?.error || 'Empty AI response');
+    let text: string;
+    try {
+      const { data, error } = await supabase.functions.invoke('ai-import', {
+        body: {
+          provider: 'deepseek',
+          systemPrompt: DEEPSEEK_SYSTEM_PROMPT,
+          userPrompt,
+          temperature: 0.2,
+          maxTokens: 4096,
+        },
+      });
+      if (error) throw new Error(error.message);
+      if (!data?.text) throw new Error(data?.error || 'Empty AI response');
+      text = data.text;
+    } catch {
+      // Edge Function орнатылмаған — тікелей DeepSeek API (fallback)
+      if (!DS_API_KEY) throw new Error('DeepSeek API key not configured');
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 120_000);
+      try {
+        text = await callOpenAICompatible(
+          { baseUrl: DS_BASE_URL, apiKey: DS_API_KEY, model: DS_MODEL },
+          DEEPSEEK_SYSTEM_PROMPT,
+          userPrompt,
+          0.2,
+          4096,
+          controller.signal,
+        );
+      } finally {
+        clearTimeout(timer);
+      }
+    }
 
-    const parsed = JSON.parse(extractJson(data.text)) as AIResponseEnvelope;
+    const parsed = JSON.parse(extractJson(text)) as AIResponseEnvelope;
     if (!parsed.questions || !Array.isArray(parsed.questions)) {
       throw new Error('Invalid DeepSeek JSON response');
     }

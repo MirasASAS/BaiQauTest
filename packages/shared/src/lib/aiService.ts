@@ -1,7 +1,23 @@
 import type { Language } from '../i18n/translations';
 import { supabase } from '../supabase';
 
-// AI-ключтер серверде (Supabase Edge Function ai-chat). Клиентте тек тексеру.
+// AI-ключ клиентте (fallback үшін) — негізгі жол: Edge Function (сервердегі ключ).
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
+const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+
+const MODELS = [
+  'gemini-3.5-flash-lite',
+  'gemini-3.1-flash-lite',
+  'gemini-3-flash-preview',
+  'gemini-2.0-flash-lite',
+  'gemini-2.0-flash',
+];
+
+interface GeminiMessage {
+  role: 'user' | 'model';
+  parts: { text: string }[];
+}
+
 export function isAIConfigured(): boolean {
   return true;
 }
@@ -40,25 +56,117 @@ function getSystemPrompt(language: Language): string {
 - Используй Markdown (текст, списки, **жирный**, формулы)`;
 }
 
+// Тікелей Gemini шақыру (fallback: Edge Function жоқ кезде)
+async function callGeminiDirect(systemPrompt: string, userPrompt: string, temperature = 0.7): Promise<string> {
+  if (!GEMINI_API_KEY) {
+    throw new Error('API key not configured');
+  }
+
+  const geminiMessages: GeminiMessage[] = [
+    { role: 'user', parts: [{ text: systemPrompt }] },
+    { role: 'model', parts: [{ text: 'OK.' }] },
+    { role: 'user', parts: [{ text: userPrompt }] },
+  ];
+
+  let lastError: Error | null = null;
+  for (const model of MODELS) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 60_000);
+      try {
+        const url = `${GEMINI_BASE_URL}/${model}:generateContent?key=${GEMINI_API_KEY}`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: geminiMessages,
+            generationConfig: { temperature, topP: 0.95, topK: 40, maxOutputTokens: 4096 },
+          }),
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`Model ${model} failed: ${response.status}`);
+        const data = await response.json();
+        const parts = data?.candidates?.[0]?.content?.parts;
+        if (!parts || parts.length === 0) throw new Error('Empty AI response - no parts');
+        let text = '';
+        for (const part of parts) { if (part.text && !part.thought) { text = part.text; break; } }
+        if (!text) { for (const part of parts) { if (part.text) { text = part.text; break; } } }
+        if (!text) throw new Error('Empty AI response - no text in parts');
+        return text;
+      } finally {
+        clearTimeout(timer);
+      }
+    } catch (err) {
+      lastError = err as Error;
+      continue;
+    }
+  }
+
+  throw lastError || new Error('All AI models failed');
+}
+
+// Жалпы Gemini шақыру (импорт үшін; Edge Function бар болса соны қолданады)
+export async function callGemini(systemPrompt: string, userPrompt: string, temperature = 0.3): Promise<string> {
+  try {
+    const { data, error } = await supabase.functions.invoke('ai-import', {
+      body: { provider: 'gemini', systemPrompt, userPrompt, temperature },
+    });
+    if (!error && data?.text) return data.text;
+  } catch { /* Edge Function жоқ — тікелей шақыруға өтеміз */ }
+  return callGeminiDirect(systemPrompt, userPrompt, temperature);
+}
+
 export async function chatWithAI(
   messages: { role: 'user' | 'assistant'; content: string }[],
   language: Language
 ): Promise<string> {
-  // AI-ключ серверде (Supabase Edge Function ai-chat) — клиентте ашық емес
-  const { data, error } = await supabase.functions.invoke('ai-chat', {
-    body: {
-      messages,
-      language,
-      systemPrompt: getSystemPrompt(language),
-    },
-  });
-  if (error) {
-    throw new Error(error.message || 'AI request failed');
+  // 1-жол: Edge Function (сервердегі ключ, қауіпсіз)
+  try {
+    const { data, error } = await supabase.functions.invoke('ai-chat', {
+      body: { messages, language, systemPrompt: getSystemPrompt(language) },
+    });
+    if (!error && data?.text) return data.text;
+  } catch { /* fallthrough */ }
+
+  // 2-жол: тікелей Gemini (клиенттегі ключ — Edge Function орнатылмаған кезеңге арналған fallback)
+  if (GEMINI_API_KEY) {
+    const geminiMessages: { role: 'user' | 'model'; parts: { text: string }[] }[] = [
+      { role: 'user', parts: [{ text: getSystemPrompt(language) }] },
+      { role: 'model', parts: [{ text: language === 'kz' ? 'Түсіндім!' : 'Понял!' }] },
+    ];
+    for (const msg of messages) {
+      geminiMessages.push({ role: msg.role === 'assistant' ? 'model' : 'user', parts: [{ text: msg.content }] });
+    }
+    let lastError: Error | null = null;
+    for (const model of MODELS) {
+      try {
+        const url = `${GEMINI_BASE_URL}/${model}:generateContent?key=${GEMINI_API_KEY}`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: geminiMessages,
+            generationConfig: { temperature: 0.7, topP: 0.95, topK: 40, maxOutputTokens: 4096 },
+          }),
+        });
+        if (!response.ok) throw new Error(`Model ${model} failed: ${response.status}`);
+        const data = await response.json();
+        const parts = data?.candidates?.[0]?.content?.parts;
+        if (!parts || parts.length === 0) throw new Error('Empty AI response');
+        let text = '';
+        for (const part of parts) { if (part.text && !part.thought) { text = part.text; break; } }
+        if (!text) { for (const part of parts) { if (part.text) { text = part.text; break; } } }
+        if (!text) throw new Error('Empty AI response');
+        return text;
+      } catch (err) {
+        lastError = err as Error;
+        continue;
+      }
+    }
+    throw lastError || new Error('All AI models failed');
   }
-  if (!data?.text) {
-    throw new Error(data?.error || 'Empty AI response');
-  }
-  return data.text;
+
+  throw new Error('AI server not deployed and no API key configured');
 }
 
 export async function explainQuestion(

@@ -1,6 +1,6 @@
 import type { ParsedQuestion, ProcessedQuestion, AIResponseEnvelope, AIQuestionResult, AIOptions } from './types';
 import { buildClaudeUserPrompt, CLAUDE_JSON_SCHEMA, CLAUDE_SYSTEM_PROMPT } from './prompts';
-import { supabase } from '@baiqautest/shared';
+import { callGemini } from '@baiqautest/shared';
 import { DeepSeekAIProvider, isDeepSeekConfigured } from './deepseekProvider';
 
 export interface AIProvider {
@@ -90,18 +90,10 @@ export class GeminiAIProvider implements AIProvider {
       })),
     });
 
-    const { data, error } = await supabase.functions.invoke('ai-import', {
-      body: {
-        provider: 'gemini',
-        systemPrompt: GEMINI_SYSTEM_PROMPT,
-        userPrompt,
-        temperature: 0.2,
-      },
-    });
-    if (error) throw new Error(error.message);
-    if (!data?.text) throw new Error(data?.error || 'Empty AI response');
+    // callGemini: Edge Function ai-import (сервердегі ключ) → тікелей Gemini (fallback)
+    const text = await callGemini(GEMINI_SYSTEM_PROMPT, userPrompt, 0.2);
 
-    const parsed = JSON.parse(extractJson(data.text)) as AIResponseEnvelope;
+    const parsed = JSON.parse(extractJson(text)) as AIResponseEnvelope;
 
     if (!parsed.questions || !Array.isArray(parsed.questions)) {
       throw new Error('Invalid Gemini JSON response');
