@@ -2,7 +2,12 @@
 // Флаг включения хранится в localStorage: exam_sound === '1'.
 
 function isSoundEnabled(): boolean {
-  return localStorage.getItem('exam_sound') === '1';
+  if (typeof window === 'undefined' || typeof localStorage === 'undefined') return false;
+  try {
+    return localStorage.getItem('exam_sound') === '1';
+  } catch {
+    return false;
+  }
 }
 
 let ctx: AudioContext | null = null;

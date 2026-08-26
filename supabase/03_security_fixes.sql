@@ -39,6 +39,9 @@ AS $$
 DECLARE
   q_count INTEGER;
 BEGIN
+  IF TG_OP = 'UPDATE' AND OLD.score = NEW.score AND OLD.total_score = NEW.total_score AND OLD.variant_id = NEW.variant_id THEN
+    RETURN NEW;
+  END IF;
   IF NEW.score < 0 THEN
     RAISE EXCEPTION 'score cannot be negative';
   END IF;
@@ -85,8 +88,6 @@ BEGIN
     RAISE EXCEPTION 'Вариант не найден';
   END IF;
 
-  SELECT COUNT(*) + 1 INTO v_order FROM public.questions WHERE variant_id = p_variant_id;
-
   FOR q IN
     SELECT * FROM public.import_questions
     WHERE import_id = p_import_id
@@ -95,6 +96,7 @@ BEGIN
       AND needs_review = FALSE
   LOOP
     BEGIN
+      SELECT COALESCE(MAX(order_num), 0) + 1 INTO v_order FROM public.questions WHERE variant_id = p_variant_id;
       INSERT INTO public.questions (
         variant_id, question_text,
         option_a, option_b, option_c, option_d,
@@ -124,10 +126,13 @@ BEGIN
   SET total_score = (SELECT COUNT(*) FROM public.questions q2 WHERE q2.variant_id = v.id)
   WHERE v.id = p_variant_id;
 
-  IF pub > 0 THEN
+  IF pub > 0 AND fail = 0 THEN
     UPDATE public.import_jobs
-    SET status = 'published', completed_at = NOW(),
-        error = CASE WHEN fail > 0 THEN fail || ' вопросов не опубликовано' ELSE NULL END
+    SET status = 'published', completed_at = NOW()
+    WHERE id = p_import_id;
+  ELSIF pub > 0 AND fail > 0 THEN
+    UPDATE public.import_jobs
+    SET status = 'review', error = fail || ' вопросов не опубликовано'
     WHERE id = p_import_id;
   ELSE
     UPDATE public.import_jobs

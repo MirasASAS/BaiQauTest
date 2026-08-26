@@ -239,25 +239,32 @@ export function TestsPage() {
   }
 
   useEffect(() => {
-    loadInitialData();
+    let active = true;
+    loadInitialData(active);
+    return () => { active = false; };
   }, [user]);
 
-  async function loadInitialData() {
+  async function loadInitialData(active = true) {
     setLoading(true);
     setLoadError(null);
     try {
       const subjectsData = await getSubjects();
+      if (!active) return;
       setSubjects(subjectsData);
       const allVariants = await getVariants();
+      if (!active) return;
       setVariants(allVariants);
       if (user) {
         const userStats = await getUserStats(user.id);
+        if (!active) return;
         setStats(userStats);
       }
     } catch (err) {
+      if (!active) return;
       console.error('Error loading data:', err);
       setLoadError(err instanceof Error ? err.message : 'Ошибка загрузки данных');
     }
+    if (!active) return;
     setLoading(false);
   }
 
@@ -306,13 +313,15 @@ export function TestsPage() {
       setVariants(variantsData);
       setSelectedSubject(subject);
       
-      // Load results for all variants
+      // Load results for all variants (parallel, resilient to individual failures)
       if (user) {
         const results: Record<number, { score: number; total_score: number } | null> = {};
-        for (const v of variantsData) {
-          const result = await getTestResultByVariant(user.id, v.id);
-          results[v.id] = result;
-        }
+        const settled = await Promise.allSettled(
+          variantsData.map(v => getTestResultByVariant(user.id, v.id))
+        );
+        variantsData.forEach((v, i) => {
+          results[v.id] = settled[i].status === 'fulfilled' ? settled[i].value : null;
+        });
         setVariantResults(results);
       }
       
@@ -357,8 +366,14 @@ export function TestsPage() {
   }
 
   // Exam countdown timer (1 minute per question)
+  const timerInitRef = useRef(false);
   useEffect(() => {
-    if (stage === 'test' && questions.length > 0 && !finishingRef.current) {
+    if (stage !== 'test') {
+      timerInitRef.current = false;
+      return;
+    }
+    if (questions.length > 0 && !finishingRef.current && !timerInitRef.current) {
+      timerInitRef.current = true;
       setTimeLeft(questions.length * 60);
       setTimeUp(false);
     }
@@ -396,26 +411,28 @@ export function TestsPage() {
   // Auto-save answers to localStorage (debounced 500ms)
   useEffect(() => {
     if (stage !== 'test' || !selectedVariant) return;
+    const key = `exam_answers_${user?.id ?? 'guest'}_${selectedVariant.id}`;
     const t = setTimeout(() => {
       try {
-        localStorage.setItem(`exam_answers_${selectedVariant.id}`, JSON.stringify(answers));
+        localStorage.setItem(key, JSON.stringify(answers));
       } catch { /* ignore */ }
     }, 500);
     return () => clearTimeout(t);
-  }, [answers, stage, selectedVariant]);
+  }, [answers, stage, selectedVariant, user?.id]);
 
   // Restore saved answers when entering the test
   useEffect(() => {
     if (stage === 'test' && selectedVariant) {
       try {
-        const saved = localStorage.getItem(`exam_answers_${selectedVariant.id}`);
+        const key = `exam_answers_${user?.id ?? 'guest'}_${selectedVariant.id}`;
+        const saved = localStorage.getItem(key);
         if (saved) {
           const parsed = JSON.parse(saved);
           if (parsed && typeof parsed === 'object') setAnswers(parsed);
         }
       } catch { /* ignore */ }
     }
-  }, [stage, selectedVariant]);
+  }, [stage, selectedVariant, user?.id]);
 
   // Keyboard navigation: 1-4 select answer, Enter next
   useEffect(() => {
@@ -462,7 +479,6 @@ export function TestsPage() {
     if (finishingRef.current) return;
     finishingRef.current = true;
     setShowFinishConfirm(false);
-    setTimeUp(false);
 
     let finalScore = 0;
     questions.forEach((q, i) => {
@@ -488,14 +504,16 @@ export function TestsPage() {
         // Refresh stats
         const userStats = await getUserStats(user.id);
         setStats(userStats);
+        playFinish();
       } catch (err) {
         console.error('Error saving result:', err);
       }
+    } else {
+      playFinish();
     }
     try {
-      if (selectedVariant) localStorage.removeItem(`exam_answers_${selectedVariant.id}`);
+      if (selectedVariant) localStorage.removeItem(`exam_answers_${user?.id ?? 'guest'}_${selectedVariant.id}`);
     } catch { /* ignore */ }
-    playFinish();
     setStage('result');
   }
 
@@ -617,8 +635,8 @@ export function TestsPage() {
               {language === 'kz' ? 'Деректерді жүктеу мүмкін болмады' : 'Не удалось загрузить данные'}
             </p>
             <p className="text-gray-400 text-sm mb-4 break-words">{loadError}</p>
-            <button
-              onClick={loadInitialData}
+<button
+              onClick={() => loadInitialData()}
               className="px-5 py-2.5 bg-[#2563eb] hover:bg-[#1e3a8a] text-white font-medium rounded-xl transition-all"
             >
               {language === 'kz' ? 'Қайталау' : 'Повторить'}
@@ -797,6 +815,36 @@ export function TestsPage() {
             })}
           </div>
         )}
+
+        {/* ── Retake confirmation modal ─────────────────────────────────── */}
+        {showRetakeConfirm && (
+          <div
+            className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4"
+            onClick={() => setShowRetakeConfirm(false)}
+          >
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+              <div className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center mb-4">
+                <RotateCcw className="w-6 h-6 text-blue-500" />
+              </div>
+              <h3 className="text-lg font-bold text-gray-900 mb-2">{t('retakeConfirmTitle')}</h3>
+              <p className="text-gray-500 text-sm mb-6">{t('retakeConfirmDesc')}</p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowRetakeConfirm(false)}
+                  className="flex-1 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-700 font-medium rounded-xl transition-all"
+                >
+                  {t('cancel')}
+                </button>
+                <button
+                  onClick={confirmRetake}
+                  className="flex-1 py-2.5 bg-[#2563eb] hover:bg-[#1e3a8a] text-white font-medium rounded-xl transition-all"
+                >
+                  {t('confirmRetake')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -825,6 +873,13 @@ export function TestsPage() {
     }
 
     const question = questions[currentQuestion];
+    if (!question) {
+      return (
+        <div className="fixed inset-0 z-50 bg-slate-100 flex items-center justify-center">
+          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#2563eb]" />
+        </div>
+      );
+    }
     const answeredCount = questions.filter((_, i) => i in answers).length;
     const isAnswered = currentQuestion in answers;
 
@@ -1085,36 +1140,6 @@ className={`w-full flex items-center gap-4 px-4 sm:px-6 py-4 text-left transitio
                   className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 text-white font-medium rounded-xl transition-all"
                 >
                   {tTest('yesFinish')}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ── Retake confirmation modal ─────────────────────────────────── */}
-        {showRetakeConfirm && (
-          <div
-            className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4"
-            onClick={() => setShowRetakeConfirm(false)}
-          >
-            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
-              <div className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center mb-4">
-                <RotateCcw className="w-6 h-6 text-blue-500" />
-              </div>
-              <h3 className="text-lg font-bold text-gray-900 mb-2">{t('retakeConfirmTitle')}</h3>
-              <p className="text-gray-500 text-sm mb-6">{t('retakeConfirmDesc')}</p>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setShowRetakeConfirm(false)}
-                  className="flex-1 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-700 font-medium rounded-xl transition-all"
-                >
-                  {t('cancel')}
-                </button>
-                <button
-                  onClick={confirmRetake}
-                  className="flex-1 py-2.5 bg-[#2563eb] hover:bg-[#1e3a8a] text-white font-medium rounded-xl transition-all"
-                >
-                  {t('confirmRetake')}
                 </button>
               </div>
             </div>

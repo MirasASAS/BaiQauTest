@@ -13,13 +13,18 @@ const MODELS = [
   'gemini-2.0-flash',
 ];
 
+interface GeminiPart {
+  text?: string;
+  thought?: boolean;
+}
+
 interface GeminiMessage {
   role: 'user' | 'model';
   parts: { text: string }[];
 }
 
 export function isAIConfigured(): boolean {
-  return true;
+  return GEMINI_API_KEY !== '';
 }
 
 function getSystemPrompt(language: Language): string {
@@ -86,11 +91,10 @@ async function callGeminiDirect(systemPrompt: string, userPrompt: string, temper
         });
         if (!response.ok) throw new Error(`Model ${model} failed: ${response.status}`);
         const data = await response.json();
-        const parts = data?.candidates?.[0]?.content?.parts;
+        const parts = data?.candidates?.[0]?.content?.parts as GeminiPart[] | undefined;
         if (!parts || parts.length === 0) throw new Error('Empty AI response - no parts');
-        let text = '';
-        for (const part of parts) { if (part.text && !part.thought) { text = part.text; break; } }
-        if (!text) { for (const part of parts) { if (part.text) { text = part.text; break; } } }
+        let text = parts.filter((p: GeminiPart) => p.text && !p.thought).map((p: GeminiPart) => p.text).join('');
+        if (!text) { text = parts.filter((p: GeminiPart) => p.text).map((p: GeminiPart) => p.text).join(''); }
         if (!text) throw new Error('Empty AI response - no text in parts');
         return text;
       } finally {
@@ -151,11 +155,10 @@ export async function chatWithAI(
         });
         if (!response.ok) throw new Error(`Model ${model} failed: ${response.status}`);
         const data = await response.json();
-        const parts = data?.candidates?.[0]?.content?.parts;
+        const parts = data?.candidates?.[0]?.content?.parts as GeminiPart[] | undefined;
         if (!parts || parts.length === 0) throw new Error('Empty AI response');
-        let text = '';
-        for (const part of parts) { if (part.text && !part.thought) { text = part.text; break; } }
-        if (!text) { for (const part of parts) { if (part.text) { text = part.text; break; } } }
+        let text = parts.filter((p: GeminiPart) => p.text && !p.thought).map((p: GeminiPart) => p.text).join('');
+        if (!text) { text = parts.filter((p: GeminiPart) => p.text).map((p: GeminiPart) => p.text).join(''); }
         if (!text) throw new Error('Empty AI response');
         return text;
       } catch (err) {
@@ -314,8 +317,6 @@ export async function generateTestQuestions(
     }
   }
 
-  console.log('AI response (first 300 chars):', jsonStr.substring(0, 300));
-
   try {
     const parsed = JSON.parse(jsonStr) as GeneratedQuestion[];
 
@@ -342,11 +343,9 @@ export async function generateTestQuestions(
       throw new Error('No valid questions in response');
     }
 
-    console.log(`Successfully parsed ${validQuestions.length} questions`);
     return validQuestions;
   } catch (parseErr) {
-    console.error('Failed to parse AI response:', jsonStr.substring(0, 500));
-    console.error('Parse error:', parseErr);
+    console.error('Failed to parse AI response:', parseErr);
     throw new Error('AI generated invalid format');
   }
 }

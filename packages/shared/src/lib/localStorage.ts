@@ -36,8 +36,11 @@ export async function getVariant(id: number): Promise<Variant | null> {
     .from('variants')
     .select('*')
     .eq('id', id)
-    .single();
-  if (error) return null;
+    .maybeSingle();
+  if (error) {
+    if (error.code === 'PGRST116') return null;
+    throw error;
+  }
   return data;
 }
 
@@ -51,7 +54,7 @@ export async function createVariant(variant: {
     .insert({
       subject_id: variant.subject_id,
       variant_number: variant.variant_number,
-      variant_name: variant.variant_name || `${variant.variant_number}-нұсқа`,
+      variant_name: variant.variant_name ?? `${variant.variant_number}-нұсқа`,
       total_score: 0,
     })
     .select()
@@ -131,7 +134,7 @@ export async function createQuestion(question: {
     .insert({
       ...question,
       score: 1,
-      order_num: question.order_num || 1,
+      order_num: question.order_num ?? 1,
     })
     .select()
     .single();
@@ -178,25 +181,29 @@ export async function getTestResults(userId: string): Promise<(TestResult & { va
   if (error) throw error;
 
   // Keep only the most recent attempt per variant (no duplicates)
-  const latestByVariant = new Map<string, typeof data[number]>();
+  const latestByVariant = new Map<number, typeof data[number]>();
   (data || []).forEach(r => {
     const existing = latestByVariant.get(r.variant_id);
-    if (!existing || new Date(r.taken_at) > new Date(existing.taken_at)) {
+    if (!existing || new Date(r.taken_at ?? 0) > new Date(existing.taken_at ?? 0)) {
       latestByVariant.set(r.variant_id, r);
     }
   });
   const unique = [...latestByVariant.values()];
 
   // Get subjects for each result
-  const subjectIds = [...new Set(unique?.map(r => r.variants?.subject_id).filter(Boolean))];
-  const { data: subjects } = await supabase
-    .from('subjects')
-    .select('*')
-    .in('id', subjectIds);
+  const subjectIds = [...new Set(unique?.map(r => r.variants?.subject_id).filter((v): v is number => typeof v === 'number'))];
+  let subjects: Subject[] = [];
+  if (subjectIds.length > 0) {
+    const { data: subjectsData } = await supabase
+      .from('subjects')
+      .select('*')
+      .in('id', subjectIds);
+    subjects = subjectsData || [];
+  }
 
   return (unique || []).map(r => ({
     ...r,
-    subjects: subjects?.find(s => s.id === r.variants?.subject_id),
+    subjects: subjects?.find(s => s.id === r.variants?.subject_id) ?? null,
   })) as (TestResult & { variants: Variant; subjects: Subject })[];
 }
 
@@ -209,7 +216,10 @@ export async function getTestResultByVariant(userId: string, variantId: number):
     .order('taken_at', { ascending: false })
     .limit(1)
     .maybeSingle();
-  if (error) return null;
+  if (error) {
+    if (error.code === 'PGRST116') return null;
+    throw error;
+  }
   return data;
 }
 
@@ -250,13 +260,16 @@ export async function saveTestResult(result: {
           variant_id: result.variant_id,
           score: result.score,
           total_score: result.total_score,
+          answers: result.answers || null,
         })
         .select()
         .single();
       if (insertError) throw insertError;
       return insertData as TestResult;
     }
-    return data?.[0] as TestResult;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) throw new Error('submit_test_result returned no row');
+    return row as TestResult;
   })());
 }
 

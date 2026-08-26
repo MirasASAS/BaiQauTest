@@ -23,14 +23,11 @@ export class MockAIProvider implements AIProvider {
     await new Promise(r => setTimeout(r, 120));
 
     return questions.map(q => {
-      const srcRu = opts.sourceLanguage === 'ru';
       const needsTranslate = opts.targetLanguage !== 'none' && opts.targetLanguage !== opts.sourceLanguage;
       // В mock-режиме «перевод» — это копия (чтобы структура была видна), помечаем на проверку
-      const question_ru = srcRu ? q.question : q.question;
-      const question_kz = srcRu ? q.question : q.question;
       return {
-        question_ru,
-        question_kz,
+        question_ru: q.question,
+        question_kz: q.question,
         options_ru: { ...q.options },
         options_kz: { ...q.options },
         correct_answer: q.correct_answer,

@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, ReactNode } from 'react';
 import { supabase } from '../supabase';
 import i18n from '../i18n';
 import type { User, Profile } from '../types';
@@ -26,6 +26,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const userIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -51,8 +52,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function fetchProfile(userId: string) {
+    userIdRef.current = userId;
     for (let i = 0; i < 10; i++) {
+      if (userIdRef.current !== userId) return;
       const { data } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
+      if (userIdRef.current !== userId) return;
       if (data) {
         setProfile(data as Profile);
         if (data.preferred_lang === 'kz' || data.preferred_lang === 'ru') {
@@ -115,11 +119,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     // Update profile with additional data (trigger created it with defaults)
+    if (!profileData.first_name || !profileData.last_name) {
+      return { error: new Error('First name and last name are required') };
+    }
     const { error: updateError } = await supabase
       .from('profiles')
       .update({
-        first_name: profileData.first_name!,
-        last_name: profileData.last_name!,
+        first_name: profileData.first_name,
+        last_name: profileData.last_name,
         middle_name: profileData.middle_name || null,
         phone: profileData.phone || null,
         gender: profileData.gender || null,

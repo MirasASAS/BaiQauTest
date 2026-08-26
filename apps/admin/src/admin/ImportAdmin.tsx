@@ -141,17 +141,21 @@ export function ImportAdmin() {
   };
 
   const bulkApprove = async () => {
-    for (const id of selectedIds) {
-      await updateImportQuestion(id, { status: 'approved', needs_review: false });
-    }
+    let failed = 0;
+    const results = await Promise.allSettled(
+      [...selectedIds].map(id => updateImportQuestion(id, { status: 'approved', needs_review: false }))
+    );
+    failed = results.filter(r => r.status === 'rejected').length;
+    if (failed > 0) setError(`Не удалось одобрить ${failed} вопросов`);
     setSelectedIds(new Set());
     if (selectedJob) loadQuestions(selectedJob);
   };
 
   const bulkDelete = async () => {
-    for (const id of selectedIds) {
-      await deleteImportQuestion(id);
-    }
+    let failed = 0;
+    const results = await Promise.allSettled([...selectedIds].map(id => deleteImportQuestion(id)));
+    failed = results.filter(r => r.status === 'rejected').length;
+    if (failed > 0) setError(`Не удалось удалить ${failed} вопросов`);
     setSelectedIds(new Set());
     if (selectedJob) loadQuestions(selectedJob);
   };
@@ -159,7 +163,9 @@ export function ImportAdmin() {
   const loadPublishData = async () => {
     try {
       setSubjects(await getSubjects());
-    } catch { /* ignore */ }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const openPublish = () => {
@@ -378,7 +384,11 @@ export function ImportAdmin() {
           {/* Questions list */}
           <div className="divide-y divide-gray-100 max-h-[560px] overflow-y-auto">
             {questions.map((q, i) => {
-              const opts = (['A', 'B', 'C', 'D'] as const).map(k => q[`option_${k.toLowerCase()}_ru` as keyof ImportQuestion] as string);
+              const opts = (['A', 'B', 'C', 'D'] as const).map(k => {
+                const ru = q[`option_${k.toLowerCase()}_ru` as keyof ImportQuestion] as string | undefined;
+                const kz = q[`option_${k.toLowerCase()}_kz` as keyof ImportQuestion] as string | undefined;
+                return (ru || kz || '') as string;
+              });
               return (
                 <div key={q.id} className={`p-4 hover:bg-gray-50/60 transition-colors ${q.needs_review ? 'bg-amber-50/40' : ''}`}>
                   <div className="flex items-start gap-3">

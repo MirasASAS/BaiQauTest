@@ -271,7 +271,7 @@ export async function parseImportFile(file: File): Promise<ParseResult> {
   switch (ext) {
     case 'xlsx': {
       const r = parseExcel(arrayBuffer);
-      return { ...r, format: r.errors.length > 0 && r.questions.length === 0 ? 'structured' : 'structured' };
+      return { ...r, format: 'structured' };
     }
     case 'csv': {
       const text = new TextDecoder('utf-8').decode(arrayBuffer);
@@ -281,7 +281,7 @@ export async function parseImportFile(file: File): Promise<ParseResult> {
     }
     case 'docx': {
       const r = await parseDocx(arrayBuffer);
-      return { ...r, format: r.errors.length > 0 && r.questions.length === 0 ? 'freeform' : 'freeform' };
+      return { ...r, format: 'freeform' };
     }
     case 'pdf': {
       const r = await parsePdf(arrayBuffer);

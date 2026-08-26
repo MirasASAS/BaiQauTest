@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Calendar, FileQuestion, X, AlertTriangle, ArrowRight, Calculator, Monitor, Globe2, Leaf, Atom, FlaskConical, MapPin, BookOpen, Globe, PackageOpen, Filter } from 'lucide-react';
 import { useAuth } from '@baiqautest/shared';
 import { useLanguage } from '@baiqautest/shared';
@@ -46,6 +46,7 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
   const [selected, setSelected] = useState<ResultWithDetails | null>(null);
   const [subjectFilter, setSubjectFilter] = useState<'all' | number>('all');
   const [sortBy, setSortBy] = useState<'date' | 'score'>('date');
+  const loadIdRef = useRef(0);
 
   useEffect(() => {
     if (user) {
@@ -55,15 +56,19 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
 
   async function loadResults() {
     if (!user) return;
+    const id = ++loadIdRef.current;
     setLoading(true);
     setError(null);
     try {
       const data = await getTestResults(user.id);
-      setResults(data);
+      if (id !== loadIdRef.current) return;
+      setResults(Array.isArray(data) ? data : []);
     } catch (err) {
+      if (id !== loadIdRef.current) return;
       console.error('Error loading results:', err);
       setError(err instanceof Error ? err.message : String(err));
     }
+    if (id !== loadIdRef.current) return;
     setLoading(false);
   }
 
@@ -71,7 +76,7 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
     if (!dateStr) return '—';
     const date = new Date(dateStr);
     if (isNaN(date.getTime())) return '—';
-    return date.toLocaleDateString(language === 'kz' ? 'kk-KZ' : 'ru-RU', {
+    return date.toLocaleString(language === 'kz' ? 'kk-KZ' : 'ru-RU', {
       day: 'numeric',
       month: 'long',
       hour: '2-digit',
@@ -94,7 +99,7 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
         const pb = b.total_score > 0 ? (b.score / b.total_score) * 100 : 0;
         return pb - pa;
       }
-      return new Date(b.taken_at).getTime() - new Date(a.taken_at).getTime();
+      return new Date(b.taken_at ?? 0).getTime() - new Date(a.taken_at ?? 0).getTime();
     });
 
   const subjectOptions = [...new Set(results.map(r => r.variants?.subject_id).filter((v): v is number => typeof v === 'number'))];
@@ -200,7 +205,7 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
               const variant = result.variants;
               const subject = result.subjects;
               const Icon = subject ? subjectIcons[subject.name] || FileQuestion : FileQuestion;
-              const iconColor = subject ? pastelIconColors[subject.id % pastelIconColors.length] : 'bg-blue-100 text-blue-600';
+              const iconColor = subject?.id != null ? pastelIconColors[subject.id % pastelIconColors.length] : 'bg-blue-100 text-blue-600';
               const variantName = variant?.variant_name || `${variant?.variant_number ?? '?'}-${language === 'kz' ? 'нұсқа' : 'вариант'}`;
               const percent = result.total_score > 0 ? Math.round((result.score / result.total_score) * 100) : 0;
 
@@ -224,7 +229,7 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
                     <div className="flex items-center gap-3 flex-shrink-0">
                       <div className={`flex flex-col items-center px-4 py-2 rounded-xl ${getBadge(result.score, result.total_score)}`}>
                         <span className="font-bold text-lg leading-none">
-                          {result.score}/{result.total_score}
+                          {result.score ?? '?'}/{result.total_score ?? '?'}
                         </span>
                         <span className="text-xs mt-0.5">{percent}%</span>
                       </div>

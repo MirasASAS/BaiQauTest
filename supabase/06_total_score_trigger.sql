@@ -15,6 +15,13 @@ AS $$
 DECLARE
   v_id BIGINT;
 BEGIN
+  -- Сұрақ бойынша бірден көп variant_id өзгерсе, ескі нұсқаны да жаңарту керек
+  IF TG_OP = 'UPDATE' AND OLD.variant_id IS DISTINCT FROM NEW.variant_id THEN
+    UPDATE public.variants
+    SET total_score = (SELECT COUNT(*) FROM public.questions WHERE variant_id = OLD.variant_id)
+    WHERE id = OLD.variant_id;
+  END IF;
+
   v_id := COALESCE(NEW.variant_id, OLD.variant_id);
   UPDATE public.variants
   SET total_score = (SELECT COUNT(*) FROM public.questions WHERE variant_id = v_id)

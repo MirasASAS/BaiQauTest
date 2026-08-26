@@ -234,6 +234,10 @@ export function AdminPage() {
       setError(t('fillAllFields'));
       return;
     }
+    if (!variantFormData.variant_number || variantFormData.variant_number < 1) {
+      setError('Номер варианта должен быть >= 1');
+      return;
+    }
 
     setSaving(true);
     setError(null);
@@ -281,6 +285,7 @@ export function AdminPage() {
       option_d: '',
       correct_answer: 'A',
     });
+    setError(null);
     setShowQuestionForm(true);
   }
 
@@ -295,6 +300,7 @@ export function AdminPage() {
       option_d: question.option_d,
       correct_answer: question.correct_answer,
     });
+    setError(null);
     setShowQuestionForm(true);
   }
 
@@ -552,7 +558,7 @@ export function AdminPage() {
                               <div>
                                 <h3 className="font-semibold text-gray-900">{variant.variant_name || `${variant.variant_number}-${language === 'kz' ? 'нұсқа' : 'вариант'}`}</h3>
                                 <div className="flex items-center gap-4 text-sm text-gray-500 mt-1">
-                                  <span>{variant.total_score} {language === 'kz' ? 'сұрақ' : 'вопросов'}</span>
+                                  <span>{loadedTotal} {language === 'kz' ? 'сұрақ' : 'вопросов'}</span>
                                   <span>{variant.total_score} {language === 'kz' ? 'балл' : 'баллов'}</span>
                                 </div>
                               </div>

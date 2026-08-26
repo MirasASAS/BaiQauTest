@@ -20,7 +20,7 @@ ALTER TABLE public.ai_usage ENABLE ROW LEVEL SECURITY;
 -- Сервер (Edge Function) өз функциясы арқылы жазады, RLS рұқсат керек
 DROP POLICY IF EXISTS "server_write_ai_usage" ON public.ai_usage;
 CREATE POLICY "server_write_ai_usage" ON public.ai_usage FOR INSERT
-  TO authenticated WITH CHECK (true);
+  TO authenticated WITH CHECK (user_id = auth.uid());
 
 DROP POLICY IF EXISTS "read_own_ai_usage" ON public.ai_usage;
 CREATE POLICY "read_own_ai_usage" ON public.ai_usage FOR SELECT

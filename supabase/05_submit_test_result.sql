@@ -18,6 +18,11 @@ AS $$
 DECLARE
   q_count INTEGER;
 BEGIN
+  -- 0. Тек өз нәтижесін ғана жазуға болады (client spoofing қорғанысы)
+  IF auth.uid() IS NULL OR p_student_id <> auth.uid() THEN
+    RAISE EXCEPTION 'Forbidden: cannot submit result for another user';
+  END IF;
+
   -- 1. Блокталған пайдаланушыға тыйым
   IF public.is_user_blocked(p_student_id) THEN
     RAISE EXCEPTION 'Аккаунт заблокирован';
