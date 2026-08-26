@@ -1,0 +1,16 @@
+{
+  "name": "baiqautest",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "workspaces": ["apps/*", "packages/*"],
+  "scripts": {
+    "dev:student": "npm run dev -w apps/student",
+    "dev:admin": "npm run dev -w apps/admin",
+    "build:student": "npm run build -w apps/student",
+    "build:admin": "npm run build -w apps/admin",
+    "test:admin": "npm test -w apps/admin",
+    "typecheck:student": "npm run typecheck -w apps/student",
+    "typecheck:admin": "npm run typecheck -w apps/admin"
+  }
+}

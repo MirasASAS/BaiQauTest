@@ -1,0 +1,15 @@
+{
+  "title": "Выберите предмет",
+  "variantCount": "{{count}} вариантов",
+  "subjects": {
+    "math": "Математика",
+    "informatics": "Информатика",
+    "kazakhstan_history": "История Казахстана",
+    "world_history": "Всемирная история",
+    "physics": "Физика",
+    "chemistry": "Химия",
+    "biology": "Биология",
+    "geography": "География",
+    "english": "Английский язык"
+  }
+}

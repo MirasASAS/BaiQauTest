@@ -1,0 +1,15 @@
+{
+  "title": "Пәнді таңдаңыз",
+  "variantCount": "{{count}} нұсқа",
+  "subjects": {
+    "math": "Математика",
+    "informatics": "Информатика",
+    "kazakhstan_history": "Қазақстан тарихы",
+    "world_history": "Дүниежүзілік тарих",
+    "physics": "Физика",
+    "chemistry": "Химия",
+    "biology": "Биология",
+    "geography": "География",
+    "english": "Ағылшын тілі"
+  }
+}

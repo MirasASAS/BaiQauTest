@@ -1,0 +1,6 @@
+question,option_a,option_b,option_c,option_d,correct_answer
+"Какой символ у кислорода?",K,O,C,H,B
+"Какой символ у кислорода?",K,O,C,H,B
+"Сколько бит в байте?",4,8,16,32,X
+"",A,B,C,D,A
+"Вопрос без вариантов",,B,C,D,A
