@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Mail, Lock, User, Phone, ArrowRight, Check } from 'lucide-react';
-import { useAuth } from '@baiqautest/shared';
+import { useAuth, AccountBlockedError } from '@baiqautest/shared';
 import { useLanguage } from '@baiqautest/shared';
 import { LanguageSwitcher } from '@baiqautest/shared';
 
@@ -29,7 +29,9 @@ export function AuthPage() {
     setLoading(true);
     setError(null);
     const { error } = await signIn(loginData.email, loginData.password);
-    if (error) setError('Неверный email или пароль');
+    if (error) {
+      setError(error instanceof AccountBlockedError ? t('accountBlocked') : t('invalidCredentials'));
+    }
     setLoading(false);
   }
 

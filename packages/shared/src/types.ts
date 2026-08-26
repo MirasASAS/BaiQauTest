@@ -47,6 +47,7 @@ export interface TestResult {
   score: number;
   total_score: number;
   taken_at: string;
+  answers?: Record<string, string> | null;
 }
 
 export interface User {

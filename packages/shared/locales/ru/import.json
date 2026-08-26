@@ -50,6 +50,6 @@
     "publishing": "Публикация",
     "published": "Опубликован",
     "failed": "Ошибка",
-    "needs_ocr": "Нужен OCR"
+    "needs_ocr": "Текст в PDF не найден"
   }
 }

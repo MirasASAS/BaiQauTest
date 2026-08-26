@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence, animate } from 'framer-motion';
-import { CheckCircle, X, AlertCircle, Check, Trophy, FileQuestion, Calculator, Monitor, Globe, Globe2, Leaf, Atom, FlaskConical, MapPin, BookOpen, ArrowLeft, Loader2, Sparkles, ArrowRight, Menu, User, Layers, Grid3x3, Droplets, RotateCcw, ChevronLeft, Clock } from 'lucide-react';
+import { CheckCircle, X, AlertCircle, Check, Trophy, FileQuestion, Calculator, Monitor, Globe, Globe2, Leaf, Atom, FlaskConical, MapPin, BookOpen, ArrowLeft, Loader2, Sparkles, ArrowRight, Menu, User, Layers, Grid3x3, Droplets, RotateCcw, ChevronLeft, ChevronDown, Clock } from 'lucide-react';
 import { useAuth } from '@baiqautest/shared';
 import { useLanguage } from '@baiqautest/shared';
 import { LanguageSwitcher } from '@baiqautest/shared';
 import { getSubjects, getVariants, getVariantsBySubjectId, getQuestionsByVariantId, getTestResultByVariant, saveTestResult, getUserStats } from '@baiqautest/shared';
-import { getStudyRecommendation, isAIConfigured } from '@baiqautest/shared';
+import { getStudyRecommendation, isAIConfigured, explainQuestion, playCorrect, playWrong, playFinish } from '@baiqautest/shared';
 import { getLeaderboard, getMyRank, getUserStreak, type LeaderboardEntry, type MyRank } from '@baiqautest/shared';
 import { useSubjectLabel } from '@baiqautest/shared';
 import type { Subject, Variant, Question } from '@baiqautest/shared';
@@ -64,6 +64,107 @@ function CircularTimer({ seconds, total }: { seconds: number; total: number }) {
       }`}>
         {mm}:{ss}
       </span>
+    </div>
+  );
+}
+
+// Per-question review item (own state — valid separate component)
+function ReviewItem({
+  question,
+  index,
+  userAnswer,
+  subjectName,
+  language,
+  tRes,
+}: {
+  question: Question;
+  index: number;
+  userAnswer: string | null;
+  subjectName: string;
+  language: 'kz' | 'ru';
+  tRes: (key: string) => string;
+}) {
+  const [explainState, setExplainState] = useState<'idle' | 'loading' | 'done'>('idle');
+  const [explainText, setExplainText] = useState('');
+
+  const isCorrect = userAnswer === question.correct_answer;
+
+  return (
+    <div className="px-5 py-4">
+      <div className="flex items-start gap-3">
+        <span className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
+          userAnswer === null
+            ? 'bg-slate-100 text-slate-400'
+            : isCorrect
+            ? 'bg-green-100 text-green-700'
+            : 'bg-red-100 text-red-700'
+        }`}>
+          {userAnswer === null ? '–' : isCorrect ? '✓' : '✗'}
+        </span>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-gray-800 mb-2">
+            {index + 1}. {question.question_text}
+          </p>
+          <div className="grid grid-cols-2 gap-1.5 mb-2">
+            {(['A', 'B', 'C', 'D'] as const).map(opt => {
+              const optText = question[`option_${opt.toLowerCase() as 'a' | 'b' | 'c' | 'd'}`];
+              const isUserAns = userAnswer === opt;
+              const isCorrectAns = question.correct_answer === opt;
+              return (
+                <div key={opt} className={`px-3 py-1.5 rounded-lg text-xs border ${
+                  isUserAns && isCorrectAns
+                    ? 'bg-green-50 border-green-200 text-green-700'
+                    : isUserAns && !isCorrectAns
+                    ? 'bg-red-50 border-red-200 text-red-600'
+                    : isCorrectAns
+                    ? 'bg-green-50/50 border-green-100 text-green-600'
+                    : 'bg-white border-gray-200 text-gray-600'
+                } ${isUserAns ? 'font-bold' : ''}`}>
+                  <span className="font-semibold mr-1">{opt})</span>{optText}
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-gray-400">
+              {tRes('yourAnswer')}: <span className={`font-bold ${userAnswer ? (isCorrect ? 'text-green-600' : 'text-red-500') : 'text-gray-400'}`}>{userAnswer || tRes('noAnswer')}</span>
+            </span>
+            <span className="text-gray-300">·</span>
+            <span className="text-gray-400">
+              {tRes('correctAnswerShort')}: <span className="font-bold text-green-600">{question.correct_answer}</span>
+            </span>
+          </div>
+          <button
+            onClick={async () => {
+              if (explainState !== 'idle') return;
+              setExplainState('loading');
+              try {
+                const text = await explainQuestion(
+                  question.question_text,
+                  { a: question.option_a, b: question.option_b, c: question.option_c, d: question.option_d },
+                  question.correct_answer,
+                  userAnswer || '—',
+                  subjectName,
+                  language,
+                );
+                setExplainText(text);
+              } catch {
+                setExplainText(language === 'kz' ? 'Түсіндіру қатесі' : 'Ошибка объяснения');
+              }
+              setExplainState('done');
+            }}
+            className="mt-2 flex items-center gap-1.5 text-xs text-blue-500 hover:text-blue-700 font-medium transition-colors"
+          >
+            <Sparkles className="w-3 h-3" />
+            {explainState === 'loading' ? tRes('explaining') : tRes('explainThis')}
+          </button>
+          {explainText && (
+            <div className="mt-2 p-3 bg-blue-50 rounded-lg text-xs text-gray-700 leading-relaxed">
+              {explainText}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -239,6 +340,22 @@ export function TestsPage() {
     setLoading(false);
   }
 
+  const [showRetakeConfirm, setShowRetakeConfirm] = useState(false);
+  const [pendingRetakeVariant, setPendingRetakeVariant] = useState<Variant | null>(null);
+
+  function requestRetake(variant: Variant) {
+    setPendingRetakeVariant(variant);
+    setShowRetakeConfirm(true);
+  }
+
+  function confirmRetake() {
+    setShowRetakeConfirm(false);
+    if (pendingRetakeVariant) {
+      selectVariant(pendingRetakeVariant);
+      setPendingRetakeVariant(null);
+    }
+  }
+
   // Exam countdown timer (1 minute per question)
   useEffect(() => {
     if (stage === 'test' && questions.length > 0 && !finishingRef.current) {
@@ -322,7 +439,15 @@ export function TestsPage() {
   }, [stage, currentQuestion, questions.length, answers]);
 
   function selectAnswer(answer: string) {
+    const wasAnswered = answers[currentQuestion];
     setAnswers(prev => ({ ...prev, [currentQuestion]: answer }));
+    if (answer !== wasAnswered) {
+      if (answer === questions[currentQuestion]?.correct_answer) {
+        playCorrect();
+      } else {
+        playWrong();
+      }
+    }
   }
 
   function goBackToVariants() {
@@ -349,11 +474,16 @@ export function TestsPage() {
 
     if (user && selectedVariant) {
       try {
+        const answersById: Record<string, string> = {};
+        questions.forEach((q, i) => {
+          if (answers[i]) answersById[q.id] = answers[i];
+        });
         await saveTestResult({
           student_id: user.id,
           variant_id: selectedVariant.id,
           score: finalScore,
           total_score: selectedVariant.total_score,
+          answers: answersById,
         });
         // Refresh stats
         const userStats = await getUserStats(user.id);
@@ -365,6 +495,7 @@ export function TestsPage() {
     try {
       if (selectedVariant) localStorage.removeItem(`exam_answers_${selectedVariant.id}`);
     } catch { /* ignore */ }
+    playFinish();
     setStage('result');
   }
 
@@ -651,7 +782,7 @@ export function TestsPage() {
                     </div>
 
                     <button
-                      onClick={() => selectVariant(variant)}
+                      onClick={() => isCompleted ? requestRetake(variant) : selectVariant(variant)}
                       className={`w-full py-3 rounded-xl font-medium transition-colors ${
                         isCompleted
                           ? 'bg-green-100 hover:bg-green-200 text-green-700'
@@ -960,6 +1091,36 @@ className={`w-full flex items-center gap-4 px-4 sm:px-6 py-4 text-left transitio
           </div>
         )}
 
+        {/* ── Retake confirmation modal ─────────────────────────────────── */}
+        {showRetakeConfirm && (
+          <div
+            className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4"
+            onClick={() => setShowRetakeConfirm(false)}
+          >
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+              <div className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center mb-4">
+                <RotateCcw className="w-6 h-6 text-blue-500" />
+              </div>
+              <h3 className="text-lg font-bold text-gray-900 mb-2">{t('retakeConfirmTitle')}</h3>
+              <p className="text-gray-500 text-sm mb-6">{t('retakeConfirmDesc')}</p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowRetakeConfirm(false)}
+                  className="flex-1 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-700 font-medium rounded-xl transition-all"
+                >
+                  {t('cancel')}
+                </button>
+                <button
+                  onClick={confirmRetake}
+                  className="flex-1 py-2.5 bg-[#2563eb] hover:bg-[#1e3a8a] text-white font-medium rounded-xl transition-all"
+                >
+                  {t('confirmRetake')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* ── Time-up modal ─────────────────────────────────────────────── */}
         {timeUp && (
           <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4">
@@ -999,6 +1160,7 @@ className={`w-full flex items-center gap-4 px-4 sm:px-6 py-4 text-left transitio
     const donutSeg = (n: number) => (totalQuestions > 0 ? (n / totalQuestions) * donutC : 0);
 
     return (
+      <>
       <div className="fixed inset-0 z-50 watermark-page flex flex-col overflow-y-auto overflow-x-hidden">
         {/* ── Right fixed tools ─────────────────────────────────────────── */}
         <div className="fixed right-3 top-3 z-50 flex flex-col items-center gap-2 bg-white rounded-xl shadow-lg border border-gray-200 px-2 py-2">
@@ -1187,6 +1349,35 @@ className={`w-full flex items-center gap-4 px-4 sm:px-6 py-4 text-left transitio
             </div>
           </div>
 
+          {/* Review section — разбор ответов */}
+          <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mb-6">
+            <button
+              onClick={() => setShowAnswerCard(!showAnswerCard)}
+              className="w-full flex items-center justify-between px-5 py-3 bg-blue-50 hover:bg-blue-100/80 transition-colors"
+            >
+              <span className="font-bold text-sm text-gray-700">{tRes('reviewTitle')}</span>
+              <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${showAnswerCard ? 'rotate-180' : ''}`} />
+            </button>
+            {showAnswerCard && (
+              <div className="divide-y divide-gray-100">
+                <div className="px-5 py-3 bg-gray-50 border-b border-gray-100">
+                  <p className="text-xs text-gray-500">{tRes('reviewDesc')}</p>
+                </div>
+                {questions.map((q, i) => (
+                  <ReviewItem
+                    key={q.id}
+                    question={q}
+                    index={i}
+                    userAnswer={answers[i] || null}
+                    subjectName={selectedSubject?.name || ''}
+                    language={language}
+                    tRes={tRes}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
           {/* Action buttons */}
           <div className="flex flex-col sm:flex-row gap-3">
             <button
@@ -1196,7 +1387,7 @@ className={`w-full flex items-center gap-4 px-4 sm:px-6 py-4 text-left transitio
               {t('backToMain')}
             </button>
             <button
-              onClick={() => selectVariant(selectedVariant!)}
+              onClick={() => requestRetake(selectedVariant!)}
               className="flex-1 py-3 bg-[#2563eb] hover:bg-[#1e3a8a] text-white font-medium rounded-xl transition-colors"
             >
               {t('tryAgain')}
@@ -1204,6 +1395,30 @@ className={`w-full flex items-center gap-4 px-4 sm:px-6 py-4 text-left transitio
           </div>
         </div>
       </div>
+
+        {/* Retake confirmation (result stage) */}
+        {showRetakeConfirm && (
+          <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4" onClick={() => setShowRetakeConfirm(false)}>
+            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+              <div className="w-12 h-12 rounded-2xl bg-blue-50 flex items-center justify-center mb-4">
+                <RotateCcw className="w-6 h-6 text-blue-500" />
+              </div>
+              <h3 className="text-lg font-bold text-gray-900 mb-2">{t('retakeConfirmTitle')}</h3>
+              <p className="text-gray-500 text-sm mb-6">{t('retakeConfirmDesc')}</p>
+              <div className="flex gap-3">
+                <button onClick={() => setShowRetakeConfirm(false)}
+                  className="flex-1 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-700 font-medium rounded-xl transition-all">
+                  {t('cancel')}
+                </button>
+                <button onClick={confirmRetake}
+                  className="flex-1 py-2.5 bg-[#2563eb] hover:bg-[#1e3a8a] text-white font-medium rounded-xl transition-all">
+                  {t('confirmRetake')}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </>
     );
   }
 

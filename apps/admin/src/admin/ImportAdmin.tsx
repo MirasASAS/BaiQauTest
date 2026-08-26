@@ -330,6 +330,22 @@ export function ImportAdmin() {
       )}
 
       {/* Selected job preview */}
+      {selectedJob && questions.length === 0 && selectedJob.status === 'needs_ocr' && (
+        <div className="card p-6 text-center">
+          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-amber-100 mb-4">
+            <AlertTriangle className="w-7 h-7 text-amber-600" />
+          </div>
+          <h3 className="font-bold text-gray-900 mb-2">{selectedJob.file_name}</h3>
+          <p className="text-sm text-gray-500 max-w-md mx-auto">
+            {language === 'kz'
+              ? 'Бұл PDF файл суреттен тұрады. Мәтіндік PDF немесе XLSX/CSV файлын жүктеңіз.'
+              : 'Этот PDF-файл состоит из изображений. Загрузите текстовый PDF или XLSX/CSV файл.'}
+          </p>
+          <button onClick={() => setSelectedJob(null)} className="mt-4 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium rounded-xl transition-all">
+            {language === 'kz' ? 'Жабу' : 'Закрыть'}
+          </button>
+        </div>
+      )}
       {selectedJob && questions.length > 0 && (
         <div className="card overflow-hidden">
           <div className="px-5 py-4 bg-slate-50 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">

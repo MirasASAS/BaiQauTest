@@ -3,6 +3,13 @@ import { supabase } from '../supabase';
 import i18n from '../i18n';
 import type { User, Profile } from '../types';
 
+export class AccountBlockedError extends Error {
+  constructor() {
+    super('ACCOUNT_BLOCKED');
+    this.name = 'AccountBlockedError';
+  }
+}
+
 interface AuthContextType {
   user: User | null;
   profile: Profile | null;
@@ -58,8 +65,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   async function signIn(email: string, password: string) {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    return { error };
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return { error };
+
+    if (data.user) {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('is_blocked')
+        .eq('id', data.user.id)
+        .maybeSingle();
+      if (profile?.is_blocked) {
+        await supabase.auth.signOut();
+        setUser(null);
+        setProfile(null);
+        return { error: new AccountBlockedError() };
+      }
+    }
+
+    return { error: null };
   }
 
   async function signUp(email: string, password: string, profileData: Partial<Profile>) {

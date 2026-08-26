@@ -99,6 +99,23 @@ export async function getQuestionsByVariantId(variantId: number): Promise<Questi
   return data || [];
 }
 
+export async function getQuestionsByVariantPaginated(
+  variantId: number,
+  page: number,
+  pageSize = 50
+): Promise<{ questions: Question[]; count: number }> {
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+  const { data, error, count } = await supabase
+    .from('questions')
+    .select('*', { count: 'exact', head: false })
+    .eq('variant_id', variantId)
+    .order('order_num')
+    .range(from, to);
+  if (error) throw error;
+  return { questions: data || [], count: count ?? 0 };
+}
+
 export async function createQuestion(question: {
   variant_id: number;
   question_text: string;
@@ -120,10 +137,6 @@ export async function createQuestion(question: {
     .single();
   if (error) throw error;
 
-  // Update variant total_score
-  const questions = await getQuestionsByVariantId(question.variant_id);
-  await updateVariant(question.variant_id, { total_score: questions.length });
-
   return data;
 }
 
@@ -138,16 +151,12 @@ export async function updateQuestion(id: number, updates: Partial<Question>): Pr
   return data;
 }
 
-export async function deleteQuestion(id: number, variantId: number): Promise<void> {
+export async function deleteQuestion(id: number, _variantId: number): Promise<void> {
   const { error } = await supabase
     .from('questions')
     .delete()
     .eq('id', id);
   if (error) throw error;
-
-  // Update variant total_score
-  const questions = await getQuestionsByVariantId(variantId);
-  await updateVariant(variantId, { total_score: questions.length });
 }
 
 // Test Results
@@ -219,15 +228,18 @@ export async function saveTestResult(result: {
   variant_id: number;
   score: number;
   total_score: number;
+  answers?: Record<string, string>;
 }): Promise<TestResult> {
   return withTimeout((async () => {
-    const { data, error } = await supabase
-      .from('results')
-      .insert(result)
-      .select()
-      .single();
+    const { data, error } = await supabase.rpc('submit_test_result', {
+      p_student_id: result.student_id,
+      p_variant_id: result.variant_id,
+      p_score: result.score,
+      p_total_score: result.total_score,
+      p_answers: result.answers || null,
+    });
     if (error) throw error;
-    return data;
+    return data?.[0] as TestResult;
   })());
 }
 

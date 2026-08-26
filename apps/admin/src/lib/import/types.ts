@@ -77,6 +77,32 @@ export interface ProcessedQuestion {
   source_index: number;
 }
 
+// Варианты ответов в сыром ответе AI (может не хватать части полей)
+export interface AIOptions {
+  A?: string;
+  B?: string;
+  C?: string;
+  D?: string;
+}
+
+// Один вопрос в сыром JSON-ответе AI-провайдера
+export interface AIQuestionResult {
+  question_ru?: string;
+  question_kz?: string;
+  options_ru?: AIOptions;
+  options_kz?: AIOptions;
+  correct_answer?: 'A' | 'B' | 'C' | 'D';
+  confidence?: number;
+  needs_review?: boolean;
+  is_duplicate?: boolean;
+  source_index?: number;
+}
+
+// Обёртка ответа AI-провайдера
+export interface AIResponseEnvelope {
+  questions: AIQuestionResult[];
+}
+
 // Результат парсинга файла
 export interface ParseResult {
   questions: ParsedQuestion[];

@@ -1,6 +1,6 @@
 // Админ-приложение: логин → проверка роли → AdminPage.
 // RLS/триггеры Supabase не трогаем — это только UX-слой поверх защиты.
-import { AuthProvider, LanguageProvider, useAuth, useLanguage } from '@baiqautest/shared';
+import { AuthProvider, LanguageProvider, ErrorBoundary, useAuth, useLanguage } from '@baiqautest/shared';
 import { AdminPage } from './AdminPage';
 import AdminAuthPage from './AdminAuthPage';
 
@@ -62,7 +62,9 @@ export default function App() {
   return (
     <LanguageProvider>
       <AuthProvider>
-        <AdminGate />
+        <ErrorBoundary>
+          <AdminGate />
+        </ErrorBoundary>
       </AuthProvider>
     </LanguageProvider>
   );

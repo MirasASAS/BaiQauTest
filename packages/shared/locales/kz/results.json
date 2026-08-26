@@ -19,5 +19,11 @@
   "wrong": "Қате",
   "skipped": "Жауапсыз",
   "result": "нәтиже",
-  "correctWrongSkipped": "Дұрыс / қате / жауапсыз"
+  "correctWrongSkipped": "Дұрыс / қате / жауапсыз",
+  "reviewTitle": "Жауаптарды талдау",
+  "reviewDesc": "Қай жерде қателескеніңізді қарап, материалды бекітіңіз",
+  "explainThis": "Түсіндіру",
+  "explaining": "Түсіндіріп жатырмын...",
+  "noAnswer": "Жауап жоқ",
+  "correctAnswerShort": "Дұрыс жауап"
 }

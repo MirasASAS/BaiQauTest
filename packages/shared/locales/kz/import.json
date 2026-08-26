@@ -50,6 +50,6 @@
     "publishing": "Жариялануда",
     "published": "Жарияланды",
     "failed": "Қате",
-    "needs_ocr": "OCR қажет"
+    "needs_ocr": "PDF мәтіні жоқ"
   }
 }

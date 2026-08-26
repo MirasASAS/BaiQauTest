@@ -17,6 +17,7 @@ export function MainLayout({ children, currentPage, onNavigate }: MainLayoutProp
   const { t } = useLanguage();
   const { collapsed, setCollapsed } = useSidebar();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showLogoutModal, setShowLogoutModal] = useState(false);
 
   const fullName = [profile?.last_name, profile?.first_name, profile?.middle_name].filter(Boolean).join(' ');
 
@@ -28,6 +29,11 @@ export function MainLayout({ children, currentPage, onNavigate }: MainLayoutProp
   ];
 
   async function handleSignOut() {
+    setShowLogoutModal(true);
+  }
+
+  async function confirmSignOut() {
+    setShowLogoutModal(false);
     await signOut();
   }
 
@@ -182,6 +188,30 @@ export function MainLayout({ children, currentPage, onNavigate }: MainLayoutProp
           </motion.div>
         </AnimatePresence>
       </main>
+
+      {/* Logout confirmation modal */}
+      {showLogoutModal && (
+        <div className="fixed inset-0 bg-black/50 z-[70] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6">
+            <h3 className="text-lg font-bold text-gray-900 mb-2">{t('logoutConfirmTitle')}</h3>
+            <p className="text-sm text-gray-500 mb-6">{t('logoutConfirmDesc')}</p>
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowLogoutModal(false)}
+                className="flex-1 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-700 font-medium rounded-xl transition-colors"
+              >
+                {t('stayLoggedIn')}
+              </button>
+              <button
+                onClick={confirmSignOut}
+                className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 text-white font-medium rounded-xl transition-colors"
+              >
+                {t('logout')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

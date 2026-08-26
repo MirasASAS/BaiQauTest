@@ -19,5 +19,11 @@
   "wrong": "Неверно",
   "skipped": "Без ответа",
   "result": "результат",
-  "correctWrongSkipped": "Верно / неверно / без ответа"
+  "correctWrongSkipped": "Верно / неверно / без ответа",
+  "reviewTitle": "Разбор ответов",
+  "reviewDesc": "Посмотрите, где ошиблись, и закрепите материал",
+  "explainThis": "Объяснить",
+  "explaining": "Объясняю...",
+  "noAnswer": "Без ответа",
+  "correctAnswerShort": "Правильный ответ"
 }

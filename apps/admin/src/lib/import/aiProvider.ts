@@ -1,6 +1,6 @@
-import type { ParsedQuestion, ProcessedQuestion } from './types';
+import type { ParsedQuestion, ProcessedQuestion, AIResponseEnvelope, AIQuestionResult, AIOptions } from './types';
 import { buildClaudeUserPrompt, CLAUDE_JSON_SCHEMA, CLAUDE_SYSTEM_PROMPT } from './prompts';
-import { callGemini } from '@baiqautest/shared';
+import { supabase } from '@baiqautest/shared';
 import { DeepSeekAIProvider, isDeepSeekConfigured } from './deepseekProvider';
 
 export interface AIProvider {
@@ -90,18 +90,28 @@ export class GeminiAIProvider implements AIProvider {
       })),
     });
 
-    const text = await callGemini(GEMINI_SYSTEM_PROMPT, userPrompt, 0.2);
-    const parsed = JSON.parse(extractJson(text));
+    const { data, error } = await supabase.functions.invoke('ai-import', {
+      body: {
+        provider: 'gemini',
+        systemPrompt: GEMINI_SYSTEM_PROMPT,
+        userPrompt,
+        temperature: 0.2,
+      },
+    });
+    if (error) throw new Error(error.message);
+    if (!data?.text) throw new Error(data?.error || 'Empty AI response');
+
+    const parsed = JSON.parse(extractJson(data.text)) as AIResponseEnvelope;
 
     if (!parsed.questions || !Array.isArray(parsed.questions)) {
       throw new Error('Invalid Gemini JSON response');
     }
 
-    return parsed.questions.map((q: any) => {
+    return parsed.questions.map((q: AIQuestionResult) => {
       const correct = (['A', 'B', 'C', 'D'] as const).includes(q.correct_answer as 'A')
         ? (q.correct_answer as 'A' | 'B' | 'C' | 'D')
         : null;
-      const opt = (obj: any) => ({
+      const opt = (obj: AIOptions | undefined): { A: string; B: string; C: string; D: string } => ({
         A: String(obj?.A || '').trim(),
         B: String(obj?.B || '').trim(),
         C: String(obj?.C || '').trim(),

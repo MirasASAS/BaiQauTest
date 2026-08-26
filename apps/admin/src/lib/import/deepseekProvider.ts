@@ -1,12 +1,9 @@
-import type { ParsedQuestion, ProcessedQuestion } from './types';
-import { callOpenAICompatible } from '../ai/openaiCompat';
+import type { ParsedQuestion, ProcessedQuestion, AIResponseEnvelope, AIQuestionResult, AIOptions } from './types';
+import { supabase } from '@baiqautest/shared';
 
-const DS_BASE_URL = import.meta.env.VITE_DEEPSEEK_BASE_URL || 'https://api.b.ai/v1';
-const DS_MODEL = import.meta.env.VITE_DEEPSEEK_MODEL || 'deepseek-v4-flash-vision-exp';
-const DS_API_KEY = import.meta.env.VITE_DEEPSEEK_API_KEY || '';
-
+// AI-ключтер серверде (Supabase Edge Function ai-import). Клиентте тек рөл тексеріледі.
 export function isDeepSeekConfigured(): boolean {
-  return !!DS_API_KEY;
+  return true;
 }
 
 const DEEPSEEK_SYSTEM_PROMPT = `You are a test-question extraction and translation engine for ЕНТ/ҰБТ.
@@ -53,32 +50,28 @@ export class DeepSeekAIProvider {
       })),
     });
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 120_000);
-    let text: string;
-    try {
-      text = await callOpenAICompatible(
-        { baseUrl: DS_BASE_URL, apiKey: DS_API_KEY, model: DS_MODEL },
-        DEEPSEEK_SYSTEM_PROMPT,
+    const { data, error } = await supabase.functions.invoke('ai-import', {
+      body: {
+        provider: 'deepseek',
+        systemPrompt: DEEPSEEK_SYSTEM_PROMPT,
         userPrompt,
-        0.2,
-        4096,
-        controller.signal,
-      );
-    } finally {
-      clearTimeout(timer);
-    }
+        temperature: 0.2,
+        maxTokens: 4096,
+      },
+    });
+    if (error) throw new Error(error.message);
+    if (!data?.text) throw new Error(data?.error || 'Empty AI response');
 
-    const parsed = JSON.parse(extractJson(text));
+    const parsed = JSON.parse(extractJson(data.text)) as AIResponseEnvelope;
     if (!parsed.questions || !Array.isArray(parsed.questions)) {
       throw new Error('Invalid DeepSeek JSON response');
     }
 
-    return parsed.questions.map((q: any) => {
+    return parsed.questions.map((q: AIQuestionResult) => {
       const correct = (['A', 'B', 'C', 'D'] as const).includes(q.correct_answer as 'A')
         ? (q.correct_answer as 'A' | 'B' | 'C' | 'D')
         : null;
-      const opt = (obj: any) => ({
+      const opt = (obj: AIOptions | undefined): { A: string; B: string; C: string; D: string } => ({
         A: String(obj?.A || '').trim(),
         B: String(obj?.B || '').trim(),
         C: String(obj?.C || '').trim(),

@@ -1,20 +1,9 @@
 import type { Language } from '../i18n/translations';
+import { supabase } from '../supabase';
 
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY || '';
-const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
-
-// Models to try in order — if one fails (rate limit, etc.), try the next
-const MODELS = [
-  'gemini-3.5-flash-lite',
-  'gemini-3.1-flash-lite',
-  'gemini-3-flash-preview',
-  'gemini-2.0-flash-lite',
-  'gemini-2.0-flash',
-];
-
-interface GeminiMessage {
-  role: 'user' | 'model';
-  parts: { text: string }[];
+// AI-ключтер серверде (Supabase Edge Function ai-chat). Клиентте тек тексеру.
+export function isAIConfigured(): boolean {
+  return true;
 }
 
 function getSystemPrompt(language: Language): string {
@@ -23,7 +12,7 @@ function getSystemPrompt(language: Language): string {
 
 Сенің рөлің:
 - Тест сұрақтарын түсіндіру
-- Қателерді талдау және дұрыс жауаптарды түсіндіру  
+- Қателерді талдау және дұрыс жауаптарды түсіндіру
 - Математика, физика, химия, биология, тарих, география, информатика, ағылшын тілі пәндері бойынша кеңес беру
 - Оқушыларды мотивациялау
 
@@ -51,150 +40,25 @@ function getSystemPrompt(language: Language): string {
 - Используй Markdown (текст, списки, **жирный**, формулы)`;
 }
 
-export function isAIConfigured(): boolean {
-  return !!GEMINI_API_KEY;
-}
-
-// Общий вызов Gemini с кастомным system-промптом (переиспользуется импортом и др.)
-export async function callGemini(systemPrompt: string, userPrompt: string, temperature = 0.3): Promise<string> {
-  if (!GEMINI_API_KEY) {
-    throw new Error('API key not configured');
-  }
-
-  const geminiMessages: GeminiMessage[] = [
-    { role: 'user', parts: [{ text: systemPrompt }] },
-    { role: 'model', parts: [{ text: 'OK.' }] },
-    { role: 'user', parts: [{ text: userPrompt }] },
-  ];
-
-  let lastError: Error | null = null;
-  for (const model of MODELS) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 60_000); // защита от зависания
-    try {
-      const result = await tryModel(model, geminiMessages, temperature, controller.signal);
-      clearTimeout(timer);
-      return result;
-    } catch (err) {
-      clearTimeout(timer);
-      lastError = err as Error;
-      console.warn(`Model ${model} failed, trying next...`);
-      continue;
-    }
-  }
-
-  console.error('All models failed:', lastError);
-  throw lastError || new Error('All AI models failed');
-}
-
-async function tryModel(model: string, geminiMessages: GeminiMessage[], temperature = 0.7, signal?: AbortSignal): Promise<string> {
-  const url = `${GEMINI_BASE_URL}/${model}:generateContent?key=${GEMINI_API_KEY}`;
-  
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      contents: geminiMessages,
-      generationConfig: {
-        temperature,
-        topP: 0.95,
-        topK: 40,
-        maxOutputTokens: 4096,
-      },
-    }),
-    signal,
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.warn(`Model ${model} failed (${response.status}):`, errorText);
-    throw new Error(`Model ${model} failed: ${response.status}`);
-  }
-
-  const data = await response.json();
-  
-  // Search through all parts to find text content
-  // Thinking models may have multiple parts (thought + text)
-  const parts = data?.candidates?.[0]?.content?.parts;
-  if (!parts || parts.length === 0) {
-    throw new Error('Empty AI response - no parts');
-  }
-
-  // Find the part with actual text (skip thought-only parts)
-  let text = '';
-  for (const part of parts) {
-    if (part.text && !part.thought) {
-      text = part.text;
-      break;
-    }
-  }
-  
-  // Fallback: if no non-thought text found, use first part with text
-  if (!text) {
-    for (const part of parts) {
-      if (part.text) {
-        text = part.text;
-        break;
-      }
-    }
-  }
-
-  if (!text) {
-    console.error('No text in AI response parts:', JSON.stringify(parts).substring(0, 500));
-    throw new Error('Empty AI response - no text in parts');
-  }
-
-  return text;
-}
-
 export async function chatWithAI(
   messages: { role: 'user' | 'assistant'; content: string }[],
   language: Language
 ): Promise<string> {
-  if (!GEMINI_API_KEY) {
-    throw new Error('API key not configured');
-  }
-
-  const systemPrompt = getSystemPrompt(language);
-
-  const geminiMessages: GeminiMessage[] = [
-    {
-      role: 'user',
-      parts: [{ text: systemPrompt }],
+  // AI-ключ серверде (Supabase Edge Function ai-chat) — клиентте ашық емес
+  const { data, error } = await supabase.functions.invoke('ai-chat', {
+    body: {
+      messages,
+      language,
+      systemPrompt: getSystemPrompt(language),
     },
-    {
-      role: 'model',
-      parts: [{ text: language === 'kz' 
-        ? 'Түсіндім! Мен BaiQAU AI-мін. ҰБТ-ге дайындалуға көмектесуге дайынмын.'
-        : 'Понял! Я BaiQAU AI. Готов помочь с подготовкой к ЕНТ.' }],
-    },
-  ];
-
-  for (const msg of messages) {
-    geminiMessages.push({
-      role: msg.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: msg.content }],
-    });
+  });
+  if (error) {
+    throw new Error(error.message || 'AI request failed');
   }
-
-  // Try models in order until one works
-  let lastError: Error | null = null;
-  for (const model of MODELS) {
-    try {
-      console.log(`Trying model: ${model}`);
-      const result = await tryModel(model, geminiMessages);
-      return result;
-    } catch (err) {
-      lastError = err as Error;
-      console.warn(`Model ${model} failed, trying next...`);
-      continue;
-    }
+  if (!data?.text) {
+    throw new Error(data?.error || 'Empty AI response');
   }
-
-  console.error('All models failed:', lastError);
-  throw new Error('All AI models failed');
+  return data.text;
 }
 
 export async function explainQuestion(
@@ -345,19 +209,19 @@ export async function generateTestQuestions(
   console.log('AI response (first 300 chars):', jsonStr.substring(0, 300));
 
   try {
-    const parsed = JSON.parse(jsonStr);
-    
+    const parsed = JSON.parse(jsonStr) as GeneratedQuestion[];
+
     if (!Array.isArray(parsed)) {
       throw new Error('Response is not an array');
     }
 
     // Validate and clean each question
     const validQuestions: GeneratedQuestion[] = parsed
-      .filter((q: any) => 
+      .filter(q =>
         q.question_text && q.option_a && q.option_b && q.option_c && q.option_d && 
-        ['A', 'B', 'C', 'D'].includes(q.correct_answer?.toUpperCase())
+        ['A', 'B', 'C', 'D'].includes(q.correct_answer?.toUpperCase() ?? '')
       )
-      .map((q: any) => ({
+      .map(q => ({
         question_text: String(q.question_text).trim(),
         option_a: String(q.option_a).trim(),
         option_b: String(q.option_b).trim(),

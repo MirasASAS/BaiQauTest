@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Plus, Pencil, Trash2, X, Check, AlertCircle, Loader2, ChevronDown, ChevronUp, FileQuestion, Calculator, Monitor, Globe, Atom, FlaskConical, Dna, MapPin, BookOpen, Sparkles, Users, BarChart3, Settings2, Database, Shield, Ban, Unlock, Trophy, TrendingUp, UploadCloud } from 'lucide-react';
 import { useLanguage } from '@baiqautest/shared';
-import { getSubjects, getVariants, getQuestions, createVariant, updateVariant, deleteVariant, createQuestion, updateQuestion, deleteQuestion } from '@baiqautest/shared';
+import { getSubjects, getVariants, getQuestionsByVariantPaginated, createVariant, updateVariant, deleteVariant, createQuestion, updateQuestion, deleteQuestion } from '@baiqautest/shared';
 import { generateTestQuestions, isAIConfigured } from '@baiqautest/shared';
 import { adminListUsers, adminSetUserRole, adminToggleBlock, adminPlatformStats, type AdminUser, type PlatformStats } from '@baiqautest/shared';
 import { ImportAdmin } from './admin/ImportAdmin';
@@ -27,7 +27,10 @@ export function AdminPage() {
   const { t, language } = useLanguage();
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [variants, setVariants] = useState<Variant[]>([]);
-  const [questions, setQuestions] = useState<Question[]>([]);
+  // Ленивая загрузка вопросов по вариантам (пагинация): variant_id → вопросы
+  const [questionsByVariant, setQuestionsByVariant] = useState<Record<number, Question[]>>({});
+  const [questionsTotal, setQuestionsTotal] = useState<Record<number, number>>({});
+  const [questionsLoading, setQuestionsLoading] = useState<Record<number, boolean>>({});
   const [loading, setLoading] = useState(true);
 
   const [showVariantForm, setShowVariantForm] = useState(false);
@@ -60,6 +63,7 @@ export function AdminPage() {
   const [platformStats, setPlatformStats] = useState<PlatformStats | null>(null);
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminError, setAdminError] = useState<string | null>(null);
+  const [busyUserId, setBusyUserId] = useState<string | null>(null);
   const [soundOn, setSoundOn] = useState<boolean>(() => localStorage.getItem('exam_sound') === '1');
 
   const loadUsers = useCallback(async () => {
@@ -90,21 +94,25 @@ export function AdminPage() {
   }, [adminTab, loadUsers, loadStats]);
 
   async function handleRoleChange(userId: string, role: 'student' | 'admin') {
+    setBusyUserId(userId);
     try {
       await adminSetUserRole(userId, role);
       await loadUsers();
     } catch (err) {
       setAdminError(err instanceof Error ? err.message : String(err));
     }
+    setBusyUserId(null);
   }
 
   async function handleToggleBlock(userId: string) {
+    setBusyUserId(userId);
     try {
       await adminToggleBlock(userId);
       await loadUsers();
     } catch (err) {
       setAdminError(err instanceof Error ? err.message : String(err));
     }
+    setBusyUserId(null);
   }
 
   // AI generation state
@@ -140,18 +148,46 @@ export function AdminPage() {
   async function loadData() {
     setLoading(true);
     try {
-      const [subjectsData, variantsData, questionsData] = await Promise.all([
+      const [subjectsData, variantsData] = await Promise.all([
         getSubjects(),
         getVariants(),
-        getQuestions(),
       ]);
       setSubjects(subjectsData);
       setVariants(variantsData);
-      setQuestions(questionsData);
     } catch (err) {
       console.error('Error loading data:', err);
     }
     setLoading(false);
+  }
+
+  async function loadVariantQuestions(variantId: number) {
+    if (questionsLoading[variantId]) return;
+    const current = questionsByVariant[variantId] || [];
+    const page = Math.floor(current.length / 50) + 1;
+    setQuestionsLoading(prev => ({ ...prev, [variantId]: true }));
+    try {
+      const { questions: newQuestions, count } = await getQuestionsByVariantPaginated(variantId, page, 50);
+      setQuestionsByVariant(prev => ({
+        ...prev,
+        [variantId]: [...(prev[variantId] || []), ...newQuestions],
+      }));
+      setQuestionsTotal(prev => ({ ...prev, [variantId]: count }));
+    } catch (err) {
+      console.error('Error loading questions:', err);
+    }
+    setQuestionsLoading(prev => ({ ...prev, [variantId]: false }));
+  }
+
+  async function reloadVariantQuestions(variantId: number) {
+    setQuestionsLoading(prev => ({ ...prev, [variantId]: true }));
+    try {
+      const { questions: qs, count } = await getQuestionsByVariantPaginated(variantId, 1, 50);
+      setQuestionsByVariant(prev => ({ ...prev, [variantId]: qs }));
+      setQuestionsTotal(prev => ({ ...prev, [variantId]: count }));
+    } catch (err) {
+      console.error('Error reloading questions:', err);
+    }
+    setQuestionsLoading(prev => ({ ...prev, [variantId]: false }));
   }
 
   function toggleSubject(subjectId: number) {
@@ -160,6 +196,14 @@ export function AdminPage() {
       newExpanded.delete(subjectId);
     } else {
       newExpanded.add(subjectId);
+      // Ленивая загрузка вопросов для вариантов раскрытого предмета
+      variants
+        .filter(v => v.subject_id === subjectId)
+        .forEach(v => {
+          if (!questionsByVariant[v.id] || questionsByVariant[v.id].length === 0) {
+            loadVariantQuestions(v.id);
+          }
+        });
     }
     setExpandedSubjects(newExpanded);
   }
@@ -264,7 +308,7 @@ export function AdminPage() {
     setError(null);
 
     try {
-      const variantQuestions = questions.filter(q => q.variant_id === selectedVariantForQuestion!.id);
+      const variantQuestions = questionsByVariant[selectedVariantForQuestion!.id] || [];
       const orderNum = variantQuestions.length + 1;
 
       if (editingQuestion) {
@@ -288,7 +332,7 @@ export function AdminPage() {
           order_num: orderNum,
         });
       }
-      await loadData();
+      await reloadVariantQuestions(selectedVariantForQuestion!.id);
       setShowQuestionForm(false);
     } catch (err) {
       setError(t('saveError'));
@@ -300,7 +344,7 @@ export function AdminPage() {
     if (!confirm(t('deleteConfirm'))) return;
     try {
       await deleteQuestion(question.id, question.variant_id);
-      await loadData();
+      await reloadVariantQuestions(question.variant_id);
     } catch (err) {
       console.error('Error deleting question:', err);
     }
@@ -329,9 +373,9 @@ export function AdminPage() {
         language
       );
       setAiGeneratedQuestions(generated);
-    } catch (err: any) {
+    } catch (err) {
       console.error('AI generation error:', err);
-      const errorMsg = err?.message || t('aiGenerateError');
+      const errorMsg = err instanceof Error ? err.message : String(err);
       setAiError(`${t('aiGenerateError')} (${errorMsg})`);
     }
     setAiGenerating(false);
@@ -498,7 +542,9 @@ export function AdminPage() {
                       </div>
                     ) : (
                       subjectVariants.map(variant => {
-                        const variantQuestions = questions.filter(q => q.variant_id === variant.id);
+                        const variantQuestions = questionsByVariant[variant.id] || [];
+                        const loadedTotal = questionsTotal[variant.id] ?? variantQuestions.length;
+                        const hasMore = variantQuestions.length < loadedTotal;
 
                         return (
                           <div key={variant.id} className="p-5">
@@ -563,6 +609,19 @@ export function AdminPage() {
                                   </div>
                                 ))}
                               </div>
+                            )}
+                            {hasMore && (
+                              <button
+                                onClick={() => loadVariantQuestions(variant.id)}
+                                disabled={questionsLoading[variant.id]}
+                                className="mt-2 flex items-center justify-center gap-1.5 w-full py-2 text-sm text-[#2563eb] hover:bg-blue-50 rounded-xl transition-colors disabled:opacity-50"
+                              >
+                                {questionsLoading[variant.id] ? (
+                                  <><Loader2 className="w-4 h-4 animate-spin" />{language === 'kz' ? 'Жүктелуде...' : 'Загрузка...'}</>
+                                ) : (
+                                  <>{language === 'kz' ? 'Тағы көрсету' : 'Показать ещё'} ({variantQuestions.length} / {loadedTotal})</>
+                                )}
+                              </button>
                             )}
                           </div>
                         );
@@ -968,8 +1027,9 @@ export function AdminPage() {
                         <td className="px-4 py-3">
                           <select
                             value={u.role}
+                            disabled={busyUserId === u.id}
                             onChange={e => handleRoleChange(u.id, e.target.value as 'student' | 'admin')}
-                            className="px-2 py-1 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium focus:outline-none focus:ring-2 focus:ring-[#2563eb]/20"
+                            className="px-2 py-1 bg-gray-50 border border-gray-200 rounded-lg text-xs font-medium focus:outline-none focus:ring-2 focus:ring-[#2563eb]/20 disabled:opacity-50"
                             aria-label="Role"
                           >
                             <option value="student">{language === 'kz' ? 'Оқушы' : 'Ученик'}</option>
@@ -983,13 +1043,16 @@ export function AdminPage() {
                         <td className="px-4 py-3 text-right">
                           <button
                             onClick={() => handleToggleBlock(u.id)}
-                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                            disabled={busyUserId === u.id}
+                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all disabled:opacity-50 ${
                               u.is_blocked
                                 ? 'bg-green-100 text-green-700 hover:bg-green-200'
                                 : 'bg-red-50 text-red-600 hover:bg-red-100'
                             }`}
                           >
-                            {u.is_blocked ? (
+                            {busyUserId === u.id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : u.is_blocked ? (
                               <><Unlock className="w-3.5 h-3.5" />{language === 'kz' ? 'Босату' : 'Разблок.'}</>
                             ) : (
                               <><Ban className="w-3.5 h-3.5" />{language === 'kz' ? 'Бұғаттау' : 'Блок'}</>

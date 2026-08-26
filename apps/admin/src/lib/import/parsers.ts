@@ -3,8 +3,9 @@ import mammoth from 'mammoth';
 import type { ParsedQuestion, ParseResult, ImportFileType } from './types';
 
 // pdfjs-dist требует браузерного DOMMatrix; загружаем лениво
-let _pdfjs: any = null;
-async function getPdfjs() {
+type PdfJsModule = typeof import('pdfjs-dist');
+let _pdfjs: PdfJsModule | null = null;
+async function getPdfjs(): Promise<PdfJsModule> {
   if (!_pdfjs) {
     const mod = await import('pdfjs-dist');
     const worker = await import('pdfjs-dist/build/pdf.worker.min.mjs?url');
@@ -239,7 +240,7 @@ export async function parsePdf(arrayBuffer: ArrayBuffer): Promise<{
     for (let p = 1; p <= doc.numPages; p++) {
       const page = await doc.getPage(p);
       const content = await page.getTextContent();
-      text += content.items
+      text += (content.items as Array<{ str?: string }>)
         .map((item: { str?: string }) => item.str || '')
         .join(' ')
         .replace(/\s+/g, ' ') + '\n';
