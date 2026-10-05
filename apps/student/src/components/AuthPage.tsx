@@ -8,7 +8,11 @@ export function AuthPage() {
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const { signIn, signUp } = useAuth();
+  const [recoveryMode, setRecoveryMode] = useState(false);
+  const [recoveryEmail, setRecoveryEmail] = useState('');
+  const [recoverySent, setRecoverySent] = useState(false);
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
+  const { signIn, signUp, resetPassword } = useAuth();
   const { t } = useLanguage();
 
   const [loginData, setLoginData] = useState({ email: '', password: '' });
@@ -33,6 +37,16 @@ export function AuthPage() {
       setError(error instanceof AccountBlockedError ? t('accountBlocked') : t('invalidCredentials'));
     }
     setLoading(false);
+  }
+
+  async function handleRecovery(e: React.FormEvent) {
+    e.preventDefault();
+    if (recoveryLoading) return;
+    setRecoveryLoading(true);
+    await resetPassword(recoveryEmail);
+    // Показываем одно и то же сообщение, не раскрывая существование аккаунта
+    setRecoverySent(true);
+    setRecoveryLoading(false);
   }
 
   async function handleRegister(e: React.FormEvent) {
@@ -115,7 +129,45 @@ export function AuthPage() {
               </div>
             )}
 
-            {mode === 'login' ? (
+            {recoveryMode ? (
+              <form onSubmit={handleRecovery} className="space-y-4">
+                {recoverySent && (
+                  <div className="mb-4 p-3 bg-green-50 border border-green-200 text-green-600 text-sm rounded-xl">
+                    {t('recoveryEmailSent')}
+                  </div>
+                )}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1.5">{t('email')}</label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                    <input
+                      type="email"
+                      required
+                      value={recoveryEmail}
+                      onChange={e => setRecoveryEmail(e.target.value)}
+                      className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#2563eb]/20 focus:border-[#2563eb] transition-colors bg-gray-50"
+                      placeholder="email@example.com"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  disabled={recoveryLoading}
+                  className="w-full flex items-center justify-center gap-2 bg-[#2563eb] hover:bg-[#1e3a8a] text-white font-medium py-3 rounded-xl transition-colors disabled:opacity-50"
+                >
+                  {recoveryLoading ? '...' : t('send')}
+                </button>
+                <div className="text-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => { setRecoveryMode(false); setRecoverySent(false); setError(null); }}
+                    className="text-sm text-[#2563eb] hover:underline"
+                  >
+                    {t('backToLogin')}
+                  </button>
+                </div>
+              </form>
+            ) : mode === 'login' ? (
               <form onSubmit={handleLogin} className="space-y-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1.5">{t('email')}</label>
@@ -153,6 +205,15 @@ export function AuthPage() {
                   {loading ? '...' : t('loginButton')}
                   {!loading && <ArrowRight className="w-4 h-4" />}
                 </button>
+                <div className="text-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => { setRecoveryMode(true); setError(null); }}
+                    className="text-sm text-[#2563eb] hover:underline"
+                  >
+                    {t('forgotPassword')}
+                  </button>
+                </div>
               </form>
             ) : (
               <form onSubmit={handleRegister} className="space-y-4">
