@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Lock, ArrowRight } from 'lucide-react';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { AuthProvider, useAuth, useLanguage, LanguageProvider, ErrorBoundary } from '@baiqautest/shared';
 import { SidebarProvider } from './context/SidebarContext';
 import { AuthPage } from './components/AuthPage';
@@ -101,7 +102,28 @@ function ResetPasswordForm() {
 
 function AppContent() {
   const { user, loading, passwordRecovery } = useAuth();
-  const [currentPage, setCurrentPage] = useState('tests');
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  let currentPage: string;
+  switch (location.pathname) {
+    case '/profile':
+      currentPage = 'profile';
+      break;
+    case '/history':
+      currentPage = 'history';
+      break;
+    case '/ai':
+      currentPage = 'ai';
+      break;
+    default:
+      currentPage = 'tests';
+      break;
+  }
+
+  function handleNavigate(page: string) {
+    navigate('/' + page);
+  }
 
   if (loading) {
     return (
@@ -119,26 +141,17 @@ function AppContent() {
     return <AuthPage />;
   }
 
-  function renderPage() {
-    switch (currentPage) {
-      case 'profile':
-        return <ProfilePage />;
-      case 'history':
-        return <HistoryPage onNavigate={setCurrentPage} />;
-      case 'tests':
-        return <TestsPage />;
-      case 'ai':
-        return <AIChatPage />;
-
-      default:
-        return <ProfilePage />;
-    }
-  }
-
   return (
-    <MainLayout currentPage={currentPage} onNavigate={setCurrentPage}>
+    <MainLayout currentPage={currentPage} onNavigate={handleNavigate}>
       <ErrorBoundary key={currentPage}>
-        {renderPage()}
+        <Routes>
+          <Route path="/" element={<Navigate to="/tests" replace />} />
+          <Route path="/tests" element={<TestsPage />} />
+          <Route path="/history" element={<HistoryPage onNavigate={handleNavigate} />} />
+          <Route path="/profile" element={<ProfilePage />} />
+          <Route path="/ai" element={<AIChatPage />} />
+          <Route path="*" element={<Navigate to="/tests" replace />} />
+        </Routes>
       </ErrorBoundary>
     </MainLayout>
   );
