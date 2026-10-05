@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Sparkles, Loader2, AlertTriangle, MessageSquare, Lightbulb } from 'lucide-react';
-import { useLanguage } from '@baiqautest/shared';
-import { chatWithAI, isAIConfigured } from '@baiqautest/shared';
+import { Send, Bot, User, Sparkles, Loader2, MessageSquare, Lightbulb } from 'lucide-react';
+import { useLanguage, MathText } from '@baiqautest/shared';
+import { chatWithAI } from '@baiqautest/shared';
 
 interface Message {
   id: string;
@@ -17,8 +17,6 @@ export function AIChatPage() {
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-
-  const isConfigured = isAIConfigured();
 
   useEffect(() => {
     // Add welcome message
@@ -132,7 +130,7 @@ export function AIChatPage() {
         if (part.startsWith('**') && part.endsWith('**')) {
           return <strong key={i}>{part.slice(2, -2)}</strong>;
         }
-        return <span key={i}>{part}</span>;
+        return <MathText key={i} text={part} />;
       });
     }
 
@@ -178,31 +176,6 @@ export function AIChatPage() {
 
     flushList();
     return elements;
-  }
-
-  if (!isConfigured) {
-    return (
-      <div className="max-w-2xl mx-auto">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('aiAssistant')}</h1>
-          <p className="text-gray-500">{t('aiChatSubtitle')}</p>
-        </div>
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-amber-100 mb-4">
-            <AlertTriangle className="w-8 h-8 text-amber-600" />
-          </div>
-          <h2 className="text-xl font-bold text-gray-900 mb-2">{t('aiNoKey')}</h2>
-          <p className="text-gray-500 mb-4">
-            {language === 'kz'
-              ? 'Бесплатный API-кілтін aistudio.google.com сайтынан алуға болады'
-              : 'Бесплатный API-ключ можно получить на aistudio.google.com'}
-          </p>
-          <code className="inline-block bg-gray-100 rounded-lg px-4 py-2 text-sm font-mono text-gray-700">
-            VITE_GEMINI_API_KEY=your_key_here
-          </code>
-        </div>
-      </div>
-    );
   }
 
   return (
