@@ -5,7 +5,7 @@ import { CheckCircle, AlertCircle, Check, Trophy, FileQuestion, Calculator, Moni
 import { useAuth } from '@baiqautest/shared';
 import { useLanguage } from '@baiqautest/shared';
 import { LanguageSwitcher } from '@baiqautest/shared';
-import { getSubjects, getVariants, getVariantsBySubjectId, startTestAttempt, getTestResultByVariant, saveTestResult, getUserStats } from '@baiqautest/shared';
+import { getSubjects, getVariants, getVariantsBySubjectId, getQuestionsByVariantId, startTestAttempt, getTestResultByVariant, saveTestResult, getUserStats } from '@baiqautest/shared';
 import { getStudyRecommendation, playSelect, playFinish } from '@baiqautest/shared';
 import { getLeaderboard, getMyRank, getUserStreak, getMyTopicStats, getMyMistakes, getLastWeekWinners, getOpenFullExam, type LeaderboardEntry, type LeaderboardPeriod, type MyRank, type TopicStat, type MistakesSummary, type WeekWinner } from '@baiqautest/shared';
 import { useSubjectLabel, isAnswered, scoreAnswer, maxScore, formatAnswer, withAnswerKey } from '@baiqautest/shared';
@@ -64,6 +64,8 @@ export function TestsPage() {
   const [aiRecommendation, setAiRecommendation] = useState<string>('');
   const [loadingRecommendation, setLoadingRecommendation] = useState(false);
   const [variantResults, setVariantResults] = useState<Record<number, { score: number; total_score: number } | null>>({});
+  // Число заданий варианта: total_score — это сумма баллов, а не количество вопросов
+  const [variantCounts, setVariantCounts] = useState<Record<number, number>>({});
   const [showAnswerCard, setShowAnswerCard] = useState(false);
   const [streak, setStreak] = useState(0);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
@@ -223,6 +225,17 @@ export function TestsPage() {
         });
         setVariantResults(results);
       }
+
+      // Количество заданий считаем по самим вопросам; не загрузилось — карточка покажет только баллы
+      setVariantCounts({});
+      Promise.allSettled(variantsData.map(v => getQuestionsByVariantId(v.id))).then(settled => {
+        const counts: Record<number, number> = {};
+        variantsData.forEach((v, i) => {
+          const item = settled[i];
+          if (item.status === 'fulfilled') counts[v.id] = item.value.length;
+        });
+        setVariantCounts(counts);
+      });
       
       setStage('variants');
     } catch (err) {
@@ -783,10 +796,12 @@ export function TestsPage() {
                     </div>
 
                     <div className="flex gap-6 text-sm text-gray-600 mb-5">
-                      <div className="flex items-center gap-2">
-                        <FileQuestion className="w-4 h-4 text-gray-400" />
-                        <span>{variant.total_score} {tTest('questions')}</span>
-                      </div>
+                      {variantCounts[variant.id] !== undefined && (
+                        <div className="flex items-center gap-2">
+                          <FileQuestion className="w-4 h-4 text-gray-400" />
+                          <span>{variantCounts[variant.id]} {tTest('questions')}</span>
+                        </div>
+                      )}
                       <div className="flex items-center gap-2">
                         <Trophy className="w-4 h-4 text-gray-400" />
                         <span>{variant.total_score} {tTest('points')}</span>
