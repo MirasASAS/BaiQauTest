@@ -30,7 +30,10 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL') || '';
     const supabaseAnonKey = Deno.env.get('SUPABASE_ANON_KEY') || '';
-    const supabase = createClient(supabaseUrl, supabaseAnonKey);
+    // Запросы идут от имени пользователя (его JWT) — иначе RLS не отдаст profiles
+    const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+      global: { headers: { Authorization: `Bearer ${authHeader}` } },
+    });
 
     const { data: { user }, error: authError } = await supabase.auth.getUser(authHeader);
     if (authError || !user) return jsonResponse({ error: 'Unauthorized' }, 401);
