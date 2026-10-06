@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Pencil, Trash2, X, Check, AlertCircle, Loader2, ChevronDown, ChevronUp, FileQuestion, Calculator, Monitor, Globe, Atom, FlaskConical, Dna, MapPin, BookOpen, Sparkles, Users, BarChart3, Settings2, Database, Shield, Ban, Unlock, Trophy, TrendingUp, UploadCloud } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Check, AlertCircle, Loader2, ChevronDown, ChevronUp, FileQuestion, Calculator, Monitor, Globe, Atom, FlaskConical, Dna, MapPin, BookOpen, Sparkles, Users, BarChart3, Settings2, Database, Shield, Ban, Unlock, Trophy, TrendingUp, UploadCloud, Tags } from 'lucide-react';
 import { useLanguage } from '@baiqautest/shared';
-import { getSubjects, getVariants, getQuestionsByVariantPaginated, createVariant, updateVariant, deleteVariant, createQuestion, deleteQuestion } from '@baiqautest/shared';
-import { generateTestQuestions } from '@baiqautest/shared';
+import { getSubjects, getVariants, getQuestionsByVariantPaginated, createVariant, updateVariant, deleteVariant, createQuestion, updateQuestion, deleteQuestion } from '@baiqautest/shared';
+import { generateTestQuestions, suggestQuestionTopics, questionType, questionKey, formatAnswer } from '@baiqautest/shared';
+import { useTranslation } from 'react-i18next';
 import { adminListUsers, adminSetUserRole, adminToggleBlock, adminPlatformStats, type AdminUser, type PlatformStats } from '@baiqautest/shared';
 import { ImportAdmin } from './admin/ImportAdmin';
 import { QuestionForm } from './admin/QuestionForm';
@@ -107,6 +108,56 @@ export function AdminPage() {
   const [aiSavingAll, setAiSavingAll] = useState(false);
   const [aiSuccess, setAiSuccess] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+
+  // Расстановка тем ИИ по вопросам предмета, у которых тема не задана
+  const { t: tAdmin } = useTranslation('admin');
+  const [topicJob, setTopicJob] = useState<{ subjectId: number; done: number; total: number } | null>(null);
+  const [topicNotice, setTopicNotice] = useState<{ subjectId: number; text: string; isError: boolean } | null>(null);
+
+  async function handleFillTopics(subject: Subject) {
+    if (topicJob) return;
+    setTopicNotice(null);
+    setTopicJob({ subjectId: subject.id, done: 0, total: 0 });
+    try {
+      // все вопросы предмета, а не только уже раскрытые в списке
+      const all: Question[] = [];
+      for (const variant of variants.filter(v => v.subject_id === subject.id)) {
+        for (let page = 1; ; page++) {
+          const { questions: chunk, count } = await getQuestionsByVariantPaginated(variant.id, page, 200);
+          all.push(...chunk);
+          if (chunk.length === 0 || page * 200 >= count) break;
+        }
+      }
+      const known = new Set(all.map(q => q.topic?.trim()).filter((v): v is string => !!v));
+      const missing = all.filter(q => !q.topic?.trim());
+      if (missing.length === 0) {
+        setTopicNotice({ subjectId: subject.id, text: tAdmin('topicsNothing'), isError: false });
+        setTopicJob(null);
+        return;
+      }
+
+      let filled = 0;
+      setTopicJob({ subjectId: subject.id, done: 0, total: missing.length });
+      for (let i = 0; i < missing.length; i += 25) {
+        const batch = missing.slice(i, i + 25);
+        const topics = await suggestQuestionTopics(subject.name, batch, [...known]);
+        for (const q of batch) {
+          const topic = topics[q.id];
+          if (!topic) continue;
+          await updateQuestion(q.id, { topic });
+          known.add(topic);
+          filled++;
+        }
+        setTopicJob({ subjectId: subject.id, done: Math.min(i + 25, missing.length), total: missing.length });
+      }
+      setTopicNotice({ subjectId: subject.id, text: tAdmin('topicsDone', { filled, total: missing.length }), isError: false });
+      await Promise.all(variants.filter(v => v.subject_id === subject.id && questionsByVariant[v.id]).map(v => reloadVariantQuestions(v.id)));
+    } catch (err) {
+      console.error('Topic fill error:', err);
+      setTopicNotice({ subjectId: subject.id, text: `${tAdmin('topicsError')} (${err instanceof Error ? err.message : String(err)})`, isError: true });
+    }
+    setTopicJob(null);
+  }
 
   const subjectIcons: Record<string, typeof Calculator> = {
     math: Calculator,
@@ -454,6 +505,24 @@ export function AdminPage() {
                     >
                       <Sparkles className="w-5 h-5" />
                     </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleFillTopics(subject);
+                      }}
+                      disabled={topicJob !== null}
+                      className="flex items-center gap-1.5 p-2 text-amber-600 hover:bg-amber-50 rounded-xl transition-colors disabled:opacity-50"
+                      title={tAdmin('topicsFill')}
+                    >
+                      {topicJob?.subjectId === subject.id ? (
+                        <>
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                          {topicJob.total > 0 && <span className="text-xs font-medium tabular-nums">{topicJob.done}/{topicJob.total}</span>}
+                        </>
+                      ) : (
+                        <Tags className="w-5 h-5" />
+                      )}
+                    </button>
                     {expandedSubjects.has(subject.id) ? (
                       <ChevronUp className="w-5 h-5 text-gray-400" />
                     ) : (
@@ -461,6 +530,12 @@ export function AdminPage() {
                     )}
                   </div>
                 </button>
+
+                {topicNotice?.subjectId === subject.id && (
+                  <div className={`px-5 py-2.5 text-sm border-t ${topicNotice.isError ? 'bg-red-50 border-red-100 text-red-600' : 'bg-amber-50 border-amber-100 text-amber-800'}`}>
+                    {topicNotice.text}
+                  </div>
+                )}
 
                 {expandedSubjects.has(subject.id) && (
                   <div className="border-t border-gray-100 divide-y divide-gray-100">
@@ -515,9 +590,17 @@ export function AdminPage() {
                                       <div className="flex items-center gap-2 text-sm">
                                         <span className="text-gray-400 font-medium w-6">{idx + 1}.</span>
                                         <span className="text-gray-700 truncate max-w-md">{q.question_text}</span>
-                                        <span className={`text-xs px-2 py-0.5 rounded-lg ${q.correct_answer === 'A' ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'}`}>
-                                          {q.correct_answer}
+                                        <span className={`text-xs px-2 py-0.5 rounded-lg whitespace-nowrap ${q.correct_answer === 'A' ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'}`}>
+                                          {formatAnswer(questionKey(q))}
                                         </span>
+                                        {questionType(q) !== 'single' && (
+                                          <span className="text-xs px-2 py-0.5 rounded-lg bg-blue-50 text-[#2563eb] whitespace-nowrap">
+                                            {tAdmin(questionType(q) === 'multiple' ? 'typeMultiple' : 'typeMatching')}
+                                          </span>
+                                        )}
+                                        {!q.topic && (
+                                          <span className="text-xs px-2 py-0.5 rounded-lg bg-amber-50 text-amber-700 whitespace-nowrap">{tAdmin('noTopic')}</span>
+                                        )}
                                       </div>
                                     </div>
                                     <div className="flex items-center gap-1">

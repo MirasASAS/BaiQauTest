@@ -1,27 +1,52 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { X, Check, AlertCircle, Loader2, ImagePlus, Trash2 } from 'lucide-react';
-import { useLanguage, createQuestion, updateQuestion, uploadQuestionImage } from '@baiqautest/shared';
-import type { Question, Variant } from '@baiqautest/shared';
+import { X, Check, AlertCircle, Loader2, ImagePlus, Trash2, Plus } from 'lucide-react';
+import { useLanguage, createQuestion, updateQuestion, uploadQuestionImage, getPassages, createPassage, updatePassage, questionType } from '@baiqautest/shared';
+import type { Passage, Question, QuestionType, Variant } from '@baiqautest/shared';
 
 type Answer = 'A' | 'B' | 'C' | 'D';
-type OptionKey = 'option_a' | 'option_b' | 'option_c' | 'option_d';
+type Letter = 'A' | 'B' | 'C' | 'D' | 'E' | 'F';
+type OptionKey = 'option_a' | 'option_b' | 'option_c' | 'option_d' | 'option_e' | 'option_f';
 type OptionKzKey = `${OptionKey}_kz`;
 
-const OPTIONS: { key: OptionKey; kzKey: OptionKzKey; label: 'optionA' | 'optionB' | 'optionC' | 'optionD' }[] = [
-  { key: 'option_a', kzKey: 'option_a_kz', label: 'optionA' },
-  { key: 'option_b', kzKey: 'option_b_kz', label: 'optionB' },
-  { key: 'option_c', kzKey: 'option_c_kz', label: 'optionC' },
-  { key: 'option_d', kzKey: 'option_d_kz', label: 'optionD' },
+// Варианты E и F есть только у вопросов «несколько ответов» и «соответствие», и они необязательны
+const OPTIONS: { letter: Letter; key: OptionKey; kzKey: OptionKzKey; label: string; extra: boolean }[] = [
+  { letter: 'A', key: 'option_a', kzKey: 'option_a_kz', label: 'optionA', extra: false },
+  { letter: 'B', key: 'option_b', kzKey: 'option_b_kz', label: 'optionB', extra: false },
+  { letter: 'C', key: 'option_c', kzKey: 'option_c_kz', label: 'optionC', extra: false },
+  { letter: 'D', key: 'option_d', kzKey: 'option_d_kz', label: 'optionD', extra: false },
+  { letter: 'E', key: 'option_e', kzKey: 'option_e_kz', label: 'optionE', extra: true },
+  { letter: 'F', key: 'option_f', kzKey: 'option_f_kz', label: 'optionF', extra: true },
 ];
 
+const TYPES: QuestionType[] = ['single', 'multiple', 'matching'];
+const TYPE_LABEL: Record<QuestionType, string> = { single: 'typeSingle', multiple: 'typeMultiple', matching: 'typeMatching' };
+
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const MAX_STATEMENTS = 6;
 
 const inputClass = 'w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#2563eb]/20 focus:border-[#2563eb] bg-gray-50';
 const textareaClass = 'w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#2563eb]/20 focus:border-[#2563eb] resize-none bg-gray-50';
 
-// Форма создания/редактирования вопроса: основной текст (RU), казахская версия,
-// тема, сложность, картинка и объяснение.
+interface Statement {
+  ru: string;
+  kz: string;
+  answer: Letter | '';
+}
+
+function initialStatements(question: Question | null): Statement[] {
+  const key = question?.correct_key && !Array.isArray(question.correct_key) ? question.correct_key : {};
+  const rows = (question?.match_left || []).map((item, i) => ({
+    ru: item.ru ?? '',
+    kz: item.kz ?? '',
+    answer: (key[String(i + 1)] ?? '') as Letter | '',
+  }));
+  while (rows.length < 2) rows.push({ ru: '', kz: '', answer: '' });
+  return rows;
+}
+
+// Форма создания/редактирования вопроса: тип вопроса, основной текст (RU), казахская версия,
+// контекстный текст, тема, сложность, картинка и объяснение.
 export function QuestionForm({
   variant,
   question,
@@ -41,28 +66,57 @@ export function QuestionForm({
   const { t } = useLanguage();
   const { t: tAdmin } = useTranslation('admin');
   const [form, setForm] = useState({
+    question_type: (question ? questionType(question) : 'single') as QuestionType,
     question_text: question?.question_text ?? '',
     option_a: question?.option_a ?? '',
     option_b: question?.option_b ?? '',
     option_c: question?.option_c ?? '',
     option_d: question?.option_d ?? '',
+    option_e: question?.option_e ?? '',
+    option_f: question?.option_f ?? '',
     correct_answer: (question?.correct_answer ?? 'A') as Answer,
     question_text_kz: question?.question_text_kz ?? '',
     option_a_kz: question?.option_a_kz ?? '',
     option_b_kz: question?.option_b_kz ?? '',
     option_c_kz: question?.option_c_kz ?? '',
     option_d_kz: question?.option_d_kz ?? '',
+    option_e_kz: question?.option_e_kz ?? '',
+    option_f_kz: question?.option_f_kz ?? '',
     topic: question?.topic ?? '',
     difficulty: (question?.difficulty ?? null) as 1 | 2 | 3 | null,
     image_url: question?.image_url ?? '',
     explanation_ru: question?.explanation_ru ?? '',
     explanation_kz: question?.explanation_kz ?? '',
+    passage_id: (question?.passage_id ?? null) as number | null,
   });
+  // Верные ответы вопроса «несколько ответов»
+  const [correctLetters, setCorrectLetters] = useState<Letter[]>(
+    Array.isArray(question?.correct_key) ? (question.correct_key as Letter[]) : [],
+  );
+  // Утверждения вопроса «соответствие» и буква варианта для каждого
+  const [statements, setStatements] = useState<Statement[]>(() => initialStatements(question));
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Контекстные тексты варианта и редактор текста (null — редактор закрыт)
+  const [passages, setPassages] = useState<Passage[]>([]);
+  const [passageDraft, setPassageDraft] = useState<{ id: number | null; title: string; text_ru: string; text_kz: string } | null>(null);
+  const [passageSaving, setPassageSaving] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    getPassages(variant.id)
+      .then(rows => { if (active) setPassages(rows); })
+      .catch(() => { /* SQL 12 ещё не применён — вопросы без текстов работают как раньше */ });
+    return () => { active = false; };
+  }, [variant.id]);
+
   const set = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => setForm(prev => ({ ...prev, [key]: value }));
+  const type = form.question_type;
+  const shownOptions = OPTIONS.filter(opt => !opt.extra || type !== 'single');
+  // буквы, которые можно выбрать в ключе: только заполненные варианты
+  const filledLetters = shownOptions.filter(opt => form[opt.key].trim()).map(opt => opt.letter);
 
   async function handleImage(file: File | undefined) {
     if (!file) return;
@@ -80,10 +134,55 @@ export function QuestionForm({
     setUploading(false);
   }
 
+  async function handleSavePassage() {
+    if (!passageDraft || passageSaving) return;
+    if (!passageDraft.text_ru.trim()) {
+      setError(t('fillAllFields'));
+      return;
+    }
+    setPassageSaving(true);
+    setError(null);
+    const fields = {
+      title: passageDraft.title.trim() || null,
+      text_ru: passageDraft.text_ru.trim(),
+      text_kz: passageDraft.text_kz.trim() || null,
+    };
+    try {
+      const saved = passageDraft.id === null
+        ? await createPassage({ variant_id: variant.id, ...fields })
+        : await updatePassage(passageDraft.id, fields);
+      setPassages(prev => (prev.some(p => p.id === saved.id) ? prev.map(p => (p.id === saved.id ? saved : p)) : [...prev, saved]));
+      set('passage_id', saved.id);
+      setPassageDraft(null);
+    } catch {
+      setError(tAdmin('passageError'));
+    }
+    setPassageSaving(false);
+  }
+
   async function handleSave() {
     if (!form.question_text || !form.option_a || !form.option_b || !form.option_c || !form.option_d) {
       setError(t('fillAllFields'));
       return;
+    }
+
+    let correctKey: string[] | Record<string, string> | null = null;
+    let matchLeft: { ru: string; kz: string | null }[] | null = null;
+    if (type === 'multiple') {
+      const letters = correctLetters.filter(l => filledLetters.includes(l)).sort();
+      if (letters.length < 1 || letters.length > 3) {
+        setError(tAdmin('multipleError'));
+        return;
+      }
+      correctKey = letters;
+    } else if (type === 'matching') {
+      const rows = statements.filter(s => s.ru.trim());
+      if (rows.length < 2 || rows.some(s => !s.answer || !filledLetters.includes(s.answer))) {
+        setError(tAdmin('matchingError'));
+        return;
+      }
+      matchLeft = rows.map(s => ({ ru: s.ru.trim(), kz: s.kz.trim() || null }));
+      correctKey = Object.fromEntries(rows.map((s, i) => [String(i + 1), s.answer]));
     }
 
     setSaving(true);
@@ -91,23 +190,33 @@ export function QuestionForm({
 
     // Пустые необязательные поля храним как NULL
     const orNull = (value: string) => value.trim() || null;
+    const extra = type !== 'single';
     const fields = {
+      question_type: type,
       question_text: form.question_text,
       option_a: form.option_a,
       option_b: form.option_b,
       option_c: form.option_c,
       option_d: form.option_d,
-      correct_answer: form.correct_answer,
+      option_e: extra ? orNull(form.option_e) : null,
+      option_f: extra ? orNull(form.option_f) : null,
+      // у вопросов с ключом в correct_key одиночного ответа нет
+      correct_answer: type === 'single' ? form.correct_answer : null,
+      correct_key: correctKey,
+      match_left: matchLeft,
       question_text_kz: orNull(form.question_text_kz),
       option_a_kz: orNull(form.option_a_kz),
       option_b_kz: orNull(form.option_b_kz),
       option_c_kz: orNull(form.option_c_kz),
       option_d_kz: orNull(form.option_d_kz),
+      option_e_kz: extra ? orNull(form.option_e_kz) : null,
+      option_f_kz: extra ? orNull(form.option_f_kz) : null,
       topic: orNull(form.topic),
       difficulty: form.difficulty,
       image_url: orNull(form.image_url),
       explanation_ru: orNull(form.explanation_ru),
       explanation_kz: orNull(form.explanation_kz),
+      passage_id: form.passage_id,
     };
 
     try {
@@ -122,6 +231,8 @@ export function QuestionForm({
     }
     setSaving(false);
   }
+
+  const optionLabel = (opt: (typeof OPTIONS)[number]) => (opt.extra ? tAdmin(opt.label) : t(opt.label as 'optionA'));
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -149,6 +260,113 @@ export function QuestionForm({
             </div>
           )}
 
+          {/* Тип вопроса */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">{tAdmin('questionType')}</label>
+            <div className="flex gap-2">
+              {TYPES.map(value => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => set('question_type', value)}
+                  className={`flex-1 py-2.5 rounded-xl border-2 text-sm font-medium transition-all ${
+                    type === value
+                      ? 'border-[#2563eb] bg-blue-50 text-[#2563eb]'
+                      : 'border-gray-200 hover:border-gray-300 text-gray-600'
+                  }`}
+                >
+                  {tAdmin(TYPE_LABEL[value])}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-gray-500 mt-2">{tAdmin(`${TYPE_LABEL[type]}Hint`)}</p>
+          </div>
+
+          {/* Контекстный текст */}
+          <div className="border border-gray-200 rounded-xl p-4 space-y-3">
+            <div>
+              <p className="text-sm font-bold text-gray-800">{tAdmin('passage')}</p>
+              <p className="text-xs text-gray-500">{tAdmin('passageHint')}</p>
+            </div>
+            {passageDraft ? (
+              <div className="space-y-3">
+                <input
+                  type="text"
+                  value={passageDraft.title}
+                  onChange={e => setPassageDraft({ ...passageDraft, title: e.target.value })}
+                  maxLength={120}
+                  className={inputClass}
+                  placeholder={tAdmin('passageTitle')}
+                />
+                <textarea
+                  value={passageDraft.text_ru}
+                  onChange={e => setPassageDraft({ ...passageDraft, text_ru: e.target.value })}
+                  rows={5}
+                  className={textareaClass}
+                  placeholder={tAdmin('passageTextRu')}
+                />
+                <textarea
+                  value={passageDraft.text_kz}
+                  onChange={e => setPassageDraft({ ...passageDraft, text_kz: e.target.value })}
+                  rows={5}
+                  className={textareaClass}
+                  placeholder={tAdmin('passageTextKz')}
+                />
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPassageDraft(null)}
+                    className="px-4 py-2 border border-gray-200 hover:bg-gray-50 text-gray-700 text-sm font-medium rounded-xl transition-colors"
+                  >
+                    {t('cancel')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSavePassage}
+                    disabled={passageSaving}
+                    className="flex items-center gap-2 px-4 py-2 bg-[#2563eb] hover:bg-[#1e3a8a] text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50"
+                  >
+                    {passageSaving && <Loader2 className="w-4 h-4 animate-spin" />}
+                    {tAdmin('passageSave')}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                <select
+                  value={form.passage_id ?? ''}
+                  onChange={e => set('passage_id', e.target.value ? Number(e.target.value) : null)}
+                  className={`${inputClass} flex-1 min-w-[180px]`}
+                >
+                  <option value="">{tAdmin('passageNone')}</option>
+                  {passages.map(p => (
+                    <option key={p.id} value={p.id}>{p.title || p.text_ru.slice(0, 60)}</option>
+                  ))}
+                </select>
+                {form.passage_id !== null && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const current = passages.find(p => p.id === form.passage_id);
+                      if (current) setPassageDraft({ id: current.id, title: current.title ?? '', text_ru: current.text_ru, text_kz: current.text_kz ?? '' });
+                    }}
+                    className="px-4 py-2 border border-gray-200 hover:bg-gray-50 text-gray-700 text-sm font-medium rounded-xl transition-colors"
+                  >
+                    {tAdmin('passageEdit')}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setPassageDraft({ id: null, title: '', text_ru: '', text_kz: '' })}
+                  className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 hover:border-[#2563eb] hover:text-[#2563eb] text-gray-700 text-sm font-medium rounded-xl transition-colors"
+                >
+                  <Plus className="w-4 h-4" />
+                  {tAdmin('passageNew')}
+                </button>
+              </div>
+            )}
+          </div>
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">{t('questionText')} (RU)</label>
             <textarea
@@ -161,40 +379,134 @@ export function QuestionForm({
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            {OPTIONS.map(opt => (
+            {shownOptions.map(opt => (
               <div key={opt.key}>
-                <label className="block text-sm font-medium text-gray-700 mb-2">{t(opt.label)}</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  {optionLabel(opt)}
+                  {opt.extra && <span className="ml-1 font-normal text-gray-400">({tAdmin('optionalOption')})</span>}
+                </label>
                 <input
                   type="text"
                   value={form[opt.key]}
                   onChange={e => set(opt.key, e.target.value)}
                   className={inputClass}
-                  placeholder={t(opt.label)}
+                  placeholder={optionLabel(opt)}
                 />
               </div>
             ))}
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">{t('correctAnswer')}</label>
-            <div className="flex gap-2">
-              {(['A', 'B', 'C', 'D'] as const).map(option => (
-                <button
-                  key={option}
-                  type="button"
-                  onClick={() => set('correct_answer', option)}
-                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 font-medium transition-all ${
-                    form.correct_answer === option
-                      ? 'border-green-500 bg-green-50 text-green-700'
-                      : 'border-gray-200 hover:border-gray-300 text-gray-600'
-                  }`}
-                >
-                  {form.correct_answer === option && <Check className="w-4 h-4" />}
-                  {option}
-                </button>
-              ))}
+          {type === 'single' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{t('correctAnswer')}</label>
+              <div className="flex gap-2">
+                {(['A', 'B', 'C', 'D'] as const).map(option => (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => set('correct_answer', option)}
+                    className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 font-medium transition-all ${
+                      form.correct_answer === option
+                        ? 'border-green-500 bg-green-50 text-green-700'
+                        : 'border-gray-200 hover:border-gray-300 text-gray-600'
+                    }`}
+                  >
+                    {form.correct_answer === option && <Check className="w-4 h-4" />}
+                    {option}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
+
+          {type === 'multiple' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{tAdmin('correctAnswers')}</label>
+              <div className="flex gap-2">
+                {shownOptions.map(opt => {
+                  const isOn = correctLetters.includes(opt.letter);
+                  const isFilled = filledLetters.includes(opt.letter);
+                  return (
+                    <button
+                      key={opt.letter}
+                      type="button"
+                      disabled={!isFilled}
+                      onClick={() => setCorrectLetters(prev => (isOn ? prev.filter(l => l !== opt.letter) : [...prev, opt.letter]))}
+                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 font-medium transition-all disabled:opacity-40 ${
+                        isOn && isFilled
+                          ? 'border-green-500 bg-green-50 text-green-700'
+                          : 'border-gray-200 hover:border-gray-300 text-gray-600'
+                      }`}
+                    >
+                      {isOn && isFilled && <Check className="w-4 h-4" />}
+                      {opt.letter}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {type === 'matching' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{tAdmin('statements')}</label>
+              <div className="space-y-3">
+                {statements.map((row, i) => {
+                  const update = (changes: Partial<Statement>) => setStatements(prev => prev.map((s, k) => (k === i ? { ...s, ...changes } : s)));
+                  return (
+                    <div key={i} className="border border-gray-200 rounded-xl p-3 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="w-6 text-sm font-bold text-[#2563eb]">{i + 1}.</span>
+                        <input
+                          type="text"
+                          value={row.ru}
+                          onChange={e => update({ ru: e.target.value })}
+                          className={inputClass}
+                          placeholder={`${tAdmin('statement')} (RU)`}
+                        />
+                        <select
+                          value={row.answer}
+                          onChange={e => update({ answer: e.target.value as Letter | '' })}
+                          className="px-3 py-2.5 border border-gray-200 rounded-xl bg-gray-50 font-medium"
+                          aria-label={t('correctAnswer')}
+                        >
+                          <option value="">—</option>
+                          {filledLetters.map(letter => <option key={letter} value={letter}>{letter}</option>)}
+                        </select>
+                        {statements.length > 2 && (
+                          <button
+                            type="button"
+                            onClick={() => setStatements(prev => prev.filter((_, k) => k !== i))}
+                            className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                            title={tAdmin('removeStatement')}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
+                      </div>
+                      <input
+                        type="text"
+                        value={row.kz}
+                        onChange={e => update({ kz: e.target.value })}
+                        className={`${inputClass} ml-8 w-[calc(100%-2rem)]`}
+                        placeholder={`${tAdmin('statement')} (KZ)`}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              {statements.length < MAX_STATEMENTS && (
+                <button
+                  type="button"
+                  onClick={() => setStatements(prev => [...prev, { ru: '', kz: '', answer: '' }])}
+                  className="mt-3 flex items-center gap-1.5 text-sm text-[#2563eb] font-medium"
+                >
+                  <Plus className="w-4 h-4" />
+                  {tAdmin('addStatement')}
+                </button>
+              )}
+            </div>
+          )}
 
           {/* Казахская версия */}
           <div className="border border-gray-200 rounded-xl p-4 space-y-3">
@@ -210,14 +522,14 @@ export function QuestionForm({
               placeholder={`${t('questionText')} (KZ)`}
             />
             <div className="grid grid-cols-2 gap-3">
-              {OPTIONS.map(opt => (
+              {shownOptions.map(opt => (
                 <input
                   key={opt.kzKey}
                   type="text"
                   value={form[opt.kzKey]}
                   onChange={e => set(opt.kzKey, e.target.value)}
                   className={inputClass}
-                  placeholder={`${t(opt.label)} (KZ)`}
+                  placeholder={`${optionLabel(opt)} (KZ)`}
                 />
               ))}
             </div>
@@ -322,7 +634,7 @@ export function QuestionForm({
             </button>
             <button
               onClick={handleSave}
-              disabled={saving || uploading}
+              disabled={saving || uploading || passageDraft !== null}
               className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-[#2563eb] hover:bg-[#1e3a8a] text-white font-medium rounded-xl transition-colors disabled:opacity-50"
             >
               {saving ? (
