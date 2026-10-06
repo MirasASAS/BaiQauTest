@@ -26,7 +26,7 @@ npm run dev:admin      # админка
 
 ## Настройка Supabase
 
-1. В SQL Editor выполнить по порядку файлы `supabase/00_…sql` — `supabase/13_…sql`.
+1. В SQL Editor выполнить по порядку файлы `supabase/00_…sql` — `supabase/15_…sql`.
 2. Задеплоить функции и задать ключи ИИ:
    ```bash
    supabase functions deploy ai-chat

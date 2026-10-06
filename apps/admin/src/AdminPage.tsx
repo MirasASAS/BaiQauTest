@@ -10,6 +10,13 @@ import { QuestionForm } from './admin/QuestionForm';
 import type { GeneratedQuestion } from '@baiqautest/shared';
 import type { Subject, Variant, Question } from '@baiqautest/shared';
 
+// Структура раздела ЕНТ по предмету: число заданий и сумма баллов (как ent_section_spec в SQL 14)
+function entSpec(subjectName: string): { questions: number; points: number } {
+  if (subjectName === 'kazakhstan_history') return { questions: 20, points: 20 };
+  if (subjectName === 'math_literacy' || subjectName === 'reading_literacy') return { questions: 10, points: 10 };
+  return { questions: 40, points: 50 };
+}
+
 type VariantFormData = {
   subject_id: number;
   variant_number: number;
@@ -548,6 +555,8 @@ export function AdminPage() {
                         const variantQuestions = questionsByVariant[variant.id] || [];
                         const loadedTotal = questionsTotal[variant.id] ?? variantQuestions.length;
                         const hasMore = variantQuestions.length < loadedTotal;
+                        const spec = entSpec(subject.name);
+                        const isEntFormat = loadedTotal === spec.questions && variant.total_score === spec.points;
 
                         return (
                           <div key={variant.id} className="p-5">
@@ -557,6 +566,14 @@ export function AdminPage() {
                                 <div className="flex items-center gap-4 text-sm text-gray-500 mt-1">
                                   <span>{loadedTotal} {language === 'kz' ? 'сұрақ' : 'вопросов'}</span>
                                   <span>{variant.total_score} {language === 'kz' ? 'балл' : 'баллов'}</span>
+                                  {questionsTotal[variant.id] !== undefined && (
+                                    <span
+                                      className={`px-2 py-0.5 rounded-lg text-xs font-medium ${isEntFormat ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'}`}
+                                      title={tAdmin('entFormatHint', { questions: spec.questions, points: spec.points })}
+                                    >
+                                      {isEntFormat ? tAdmin('entFormat') : tAdmin('entFormatNo', { questions: spec.questions, points: spec.points })}
+                                    </span>
+                                  )}
                                 </div>
                               </div>
                               <div className="flex items-center gap-1">

@@ -204,6 +204,8 @@ export function FullExam({ onClose }: { onClose: () => void }) {
   if (stage === 'setup') {
     const required = options.filter(o => o.required);
     const profileOptions = options.filter(o => !o.required);
+    // предмет без варианта по структуре ЕНТ попадёт в тест с другим числом заданий
+    const offSpec = (o: FullExamOption) => o.ent_variants === 0;
     const toggle = (id: number) => setPicked(prev => (
       prev.includes(id) ? prev.filter(x => x !== id) : prev.length < 2 ? [...prev, id] : prev
     ));
@@ -224,6 +226,20 @@ export function FullExam({ onClose }: { onClose: () => void }) {
           </div>
         </div>
 
+        {/* Структура ЕНТ */}
+        <div className="grid grid-cols-3 gap-3 mb-5">
+          {[
+            ['120', tTest('fullExamStatQuestions')],
+            ['140', tTest('fullExamStatPoints')],
+            ['240', tTest('fullExamStatMinutes')],
+          ].map(([value, label]) => (
+            <div key={label} className="card px-4 py-3 text-center">
+              <p className="text-2xl font-bold text-[#1e3a8a] leading-none">{value}</p>
+              <p className="text-xs text-gray-500 mt-1.5">{label}</p>
+            </div>
+          ))}
+        </div>
+
         {error && (
           <div className="flex items-start gap-2 bg-red-50 border border-red-200 text-red-600 text-sm rounded-xl px-4 py-3 mb-5">
             <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
@@ -242,6 +258,8 @@ export function FullExam({ onClose }: { onClose: () => void }) {
                 <span key={o.subject_id} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-50 text-[#1e3a8a] text-sm font-medium">
                   <Check className="w-4 h-4" />
                   {subjectLabel(o.subject)}
+                  {o.questions != null && !offSpec(o) && <span className="text-[#2563eb]/70 font-normal">· {o.questions}</span>}
+                  {offSpec(o) && <span className="text-amber-600 font-normal">· {tTest('fullExamOffSpec')}</span>}
                 </span>
               ))}
             </div>
@@ -267,7 +285,13 @@ export function FullExam({ onClose }: { onClose: () => void }) {
                     }`}
                   >
                     <span className={`block font-semibold ${isPicked ? 'text-[#1e3a8a]' : 'text-gray-900'}`}>{subjectLabel(o.subject)}</span>
-                    <span className="block text-xs text-gray-500 mt-0.5">{o.variants} {t('variantsCount')}</span>
+                    <span className="block text-xs text-gray-500 mt-0.5">
+                      {offSpec(o)
+                        ? <span className="text-amber-600">{tTest('fullExamOffSpec')}</span>
+                        : o.questions != null
+                        ? tTest('fullExamSection', { questions: o.questions, points: o.points })
+                        : <>{o.variants} {t('variantsCount')}</>}
+                    </span>
                   </button>
                 );
               })}
