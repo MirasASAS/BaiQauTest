@@ -5,6 +5,7 @@
   "type": "module",
   "workspaces": ["apps/*", "packages/*"],
   "scripts": {
+    "dev": "npm run dev -w apps/student",
     "dev:student": "npm run dev -w apps/student",
     "dev:admin": "npm run dev -w apps/admin",
     "build:student": "npm run build -w apps/student",

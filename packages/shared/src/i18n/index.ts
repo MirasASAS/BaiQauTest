@@ -15,6 +15,8 @@ import adminRu from '../../locales/ru/admin.json';
 import adminKz from '../../locales/kz/admin.json';
 import importRu from '../../locales/ru/import.json';
 import importKz from '../../locales/kz/import.json';
+import retentionRu from '../../locales/ru/retention.json';
+import retentionKz from '../../locales/kz/retention.json';
 
 const saved = typeof localStorage !== 'undefined' ? localStorage.getItem('language') : null;
 const lng = saved === 'ru' || saved === 'kz' ? saved : 'ru';
@@ -29,6 +31,7 @@ i18n.use(initReactI18next).init({
       profile: profileRu,
       admin: adminRu,
       import: importRu,
+      retention: retentionRu,
     },
     kz: {
       common: commonKz,
@@ -38,6 +41,7 @@ i18n.use(initReactI18next).init({
       profile: profileKz,
       admin: adminKz,
       import: importKz,
+      retention: retentionKz,
     },
   },
   lng,
@@ -45,7 +49,7 @@ i18n.use(initReactI18next).init({
   defaultNS: 'common',
   interpolation: { escapeValue: false },
   returnNull: false,
-  ns: ['common', 'subjects', 'test', 'results', 'profile', 'admin', 'import'],
+  ns: ['common', 'subjects', 'test', 'results', 'profile', 'admin', 'import', 'retention'],
 });
 
 export default i18n;

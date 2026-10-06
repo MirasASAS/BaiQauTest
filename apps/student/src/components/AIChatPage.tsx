@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Sparkles, Loader2, AlertTriangle, MessageSquare, Lightbulb } from 'lucide-react';
-import { useLanguage } from '@baiqautest/shared';
-import { chatWithAI, isAIConfigured } from '@baiqautest/shared';
+import { useTranslation } from 'react-i18next';
+import { Send, Bot, User, Sparkles, Loader2, MessageSquare, Lightbulb, History, Plus, Trash2 } from 'lucide-react';
+import { useLanguage, MathText } from '@baiqautest/shared';
+import { chatWithAI, listAiChats, getAiChatMessages, createAiChat, addAiChatMessages, deleteAiChat } from '@baiqautest/shared';
+import type { AiChat } from '@baiqautest/shared';
 
 interface Message {
   id: string;
@@ -17,20 +19,100 @@ export function AIChatPage() {
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const { t: tRet } = useTranslation('retention');
+  // История чатов хранится на сервере (SQL 13). Если таблиц ещё нет, чат работает без истории.
+  const [chats, setChats] = useState<AiChat[]>([]);
+  const [historyAvailable, setHistoryAvailable] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  // null — новый чат, который ещё не сохранён
+  const [activeChatId, setActiveChatId] = useState<number | null>(null);
+  const activeChatRef = useRef<number | null>(null);
+  activeChatRef.current = activeChatId;
 
-  const isConfigured = isAIConfigured();
+  const welcomeMessage = (): Message => ({
+    id: 'welcome',
+    role: 'assistant',
+    content: t('aiWelcome'),
+    timestamp: new Date(),
+  });
 
+  // При открытии показываем последний чат; если истории нет — приветствие
   useEffect(() => {
-    // Add welcome message
-    if (messages.length === 0) {
-      setMessages([{
-        id: 'welcome',
-        role: 'assistant',
-        content: t('aiWelcome'),
-        timestamp: new Date(),
-      }]);
-    }
+    let active = true;
+    setMessages([welcomeMessage()]);
+    (async () => {
+      try {
+        const list = await listAiChats();
+        if (!active) return;
+        setChats(list);
+        setHistoryAvailable(true);
+        if (list.length > 0) await openChat(list[0].id, () => active);
+      } catch {
+        /* SQL 13 ещё не применён — работаем без истории */
+      }
+    })();
+    return () => { active = false; };
   }, []);
+
+  async function openChat(chatId: number, stillActive: () => boolean = () => true) {
+    try {
+      const rows = await getAiChatMessages(chatId);
+      if (!stillActive()) return;
+      setActiveChatId(chatId);
+      setMessages([
+        welcomeMessage(),
+        ...rows.map(r => ({ id: String(r.id), role: r.role, content: r.content, timestamp: new Date(r.created_at) })),
+      ]);
+      setShowHistory(false);
+    } catch (err) {
+      console.error('Error loading chat:', err);
+    }
+  }
+
+  function startNewChat() {
+    setActiveChatId(null);
+    setMessages([welcomeMessage()]);
+    setShowHistory(false);
+    inputRef.current?.focus();
+  }
+
+  async function removeChat(chatId: number) {
+    if (!confirm(tRet('chatDeleteConfirm'))) return;
+    try {
+      await deleteAiChat(chatId);
+      setChats(prev => prev.filter(c => c.id !== chatId));
+      if (activeChatRef.current === chatId) startNewChat();
+    } catch (err) {
+      console.error('Error deleting chat:', err);
+    }
+  }
+
+  // Сохраняем вопрос и ответ; чат создаётся при первом сообщении, заголовок — начало вопроса
+  async function persistExchange(question: string, answer: string) {
+    if (!historyAvailable) return;
+    try {
+      let chatId = activeChatRef.current;
+      if (chatId === null) {
+        const chat = await createAiChat(question.replace(/\s+/g, ' ').slice(0, 60));
+        chatId = chat.id;
+        setActiveChatId(chat.id);
+        setChats(prev => [chat, ...prev]);
+      } else {
+        const id = chatId;
+        // чат с новым сообщением поднимается наверх списка
+        setChats(prev => {
+          const found = prev.find(c => c.id === id);
+          return found ? [{ ...found, updated_at: new Date().toISOString() }, ...prev.filter(c => c.id !== id)] : prev;
+        });
+      }
+      await addAiChatMessages(chatId, [
+        { role: 'user', content: question },
+        { role: 'assistant', content: answer },
+      ]);
+    } catch (err) {
+      console.error('Error saving chat history:', err);
+    }
+  }
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -79,6 +161,7 @@ export function AIChatPage() {
       };
 
       setMessages(prev => [...prev, aiMessage]);
+      persistExchange(messageText, response);
     } catch {
       const errorMessage: Message = {
         id: (Date.now() + 1).toString(),
@@ -132,7 +215,7 @@ export function AIChatPage() {
         if (part.startsWith('**') && part.endsWith('**')) {
           return <strong key={i}>{part.slice(2, -2)}</strong>;
         }
-        return <span key={i}>{part}</span>;
+        return <MathText key={i} text={part} />;
       });
     }
 
@@ -180,31 +263,6 @@ export function AIChatPage() {
     return elements;
   }
 
-  if (!isConfigured) {
-    return (
-      <div className="max-w-2xl mx-auto">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('aiAssistant')}</h1>
-          <p className="text-gray-500">{t('aiChatSubtitle')}</p>
-        </div>
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 text-center">
-          <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-amber-100 mb-4">
-            <AlertTriangle className="w-8 h-8 text-amber-600" />
-          </div>
-          <h2 className="text-xl font-bold text-gray-900 mb-2">{t('aiNoKey')}</h2>
-          <p className="text-gray-500 mb-4">
-            {language === 'kz'
-              ? 'Бесплатный API-кілтін aistudio.google.com сайтынан алуға болады'
-              : 'Бесплатный API-ключ можно получить на aistudio.google.com'}
-          </p>
-          <code className="inline-block bg-gray-100 rounded-lg px-4 py-2 text-sm font-mono text-gray-700">
-            VITE_GEMINI_API_KEY=your_key_here
-          </code>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="max-w-3xl mx-auto flex flex-col" style={{ height: 'calc(100vh - 7rem)' }}>
       {/* Header */}
@@ -213,12 +271,68 @@ export function AIChatPage() {
           <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-violet-200">
             <Sparkles className="w-6 h-6 text-white" />
           </div>
-          <div>
+          <div className="flex-1 min-w-0">
             <h1 className="text-2xl font-bold text-gray-900">{t('aiChatTitle')}</h1>
-            <p className="text-sm text-gray-500">{t('aiChatSubtitle')}</p>
+            <p className="text-sm text-gray-500 truncate">{t('aiChatSubtitle')}</p>
           </div>
+          {historyAvailable && (
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button
+                onClick={() => setShowHistory(v => !v)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-sm font-medium ${
+                  showHistory ? 'bg-violet-50 border-violet-200 text-violet-700' : 'bg-white border-gray-200 text-gray-600 hover:border-violet-200'
+                }`}
+                aria-expanded={showHistory}
+              >
+                <History className="w-4 h-4" />
+                <span className="hidden sm:inline">{tRet('chatHistory')}</span>
+              </button>
+              <button
+                onClick={startNewChat}
+                disabled={loading}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-gray-200 text-sm font-medium text-gray-600 hover:border-violet-200 disabled:opacity-50"
+              >
+                <Plus className="w-4 h-4" />
+                <span className="hidden sm:inline">{tRet('chatNew')}</span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Список сохранённых чатов */}
+      {showHistory && (
+        <div className="flex-shrink-0 mb-3 bg-white border border-gray-100 rounded-2xl shadow-sm max-h-60 overflow-y-auto">
+          {chats.length === 0 ? (
+            <p className="px-4 py-5 text-sm text-gray-500 text-center">{tRet('chatHistoryEmpty')}</p>
+          ) : (
+            <div className="divide-y divide-gray-100">
+              {chats.map(chat => (
+                <div key={chat.id} className={`flex items-center gap-2 px-3 py-2 ${chat.id === activeChatId ? 'bg-violet-50' : ''}`}>
+                  <button
+                    onClick={() => openChat(chat.id)}
+                    disabled={loading}
+                    className="flex-1 min-w-0 text-left px-1 py-1 hover:!transform-none disabled:opacity-50"
+                  >
+                    <span className="block text-sm font-medium text-gray-800 truncate">{chat.title || tRet('chatUntitled')}</span>
+                    <span className="block text-xs text-gray-400">
+                      {new Date(chat.updated_at).toLocaleString(language === 'kz' ? 'kk-KZ' : 'ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </button>
+                  <button
+                    onClick={() => removeChat(chat.id)}
+                    className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg"
+                    aria-label={tRet('chatDelete')}
+                    title={tRet('chatDelete')}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Chat messages */}
       <div

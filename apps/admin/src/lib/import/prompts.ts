@@ -8,6 +8,7 @@ Extract:
 - question
 - four answer options
 - correct answer
+- topic: the curriculum topic of the question, 2-4 words in Russian
 
 If requested, translate Russian to Kazakh or Kazakh to Russian.
 
@@ -34,6 +35,7 @@ export const CLAUDE_JSON_SCHEMA = `{
       "options_ru": { "A": "", "B": "", "C": "", "D": "" },
       "options_kz": { "A": "", "B": "", "C": "", "D": "" },
       "correct_answer": "A",
+      "topic": "",
       "confidence": 0.0,
       "needs_review": false,
       "source_index": 1

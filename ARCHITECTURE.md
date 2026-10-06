@@ -5,125 +5,217 @@
 ## 1. Высокоуровневая схема
 
 ```
-                          БАЙҚАУ ТЕСТ (React 18 + Vite + TS)
-                                     │
-         ┌───────────────────────────┼───────────────────────────┐
-         ↓                           ↓                           ↓
-     ОҚУШЫ (student)            ADMIN (admin)                AI (импорт+чат)
-    Dashboard/Тест/История    Банк сұрақ/Импорт/           DeepSeek (b.ai)
-    Лидерборд/Streak/Бейдж    Пользователи/Статистика      → Gemini → Mock
-         │                           │                           │
-         └───────────────────────────┼───────────────────────────┘
-                                     ↓
-                           SUPABASE (Postgres + RLS)
-                                     │
-        ┌──────────────┬─────────────┼─────────────┬──────────────┐
-        ↓              ↓             ↓             ↓              ↓
-     Tables        RPC-функции   Triggers     Storage       Auth (email)
-  profiles       is_admin()    handle_new_user  test-imports   Supabase Auth
-  subjects       admin_list_users  make_first_user_admin  (файлы импорта)  │
-  variants       admin_platform_stats auto_confirm_email    │
-  questions      publish_import_questions protect_profile_fields  JWT + RLS
-  results        get_leaderboard / get_my_rank  validate_result_score
-  import_jobs    get_user_streak / get_user_badges
-  import_questions
+   apps/student (ученик)              apps/admin (админ)
+   Dashboard / Тест / История         Банк вопросов / Импорт /
+   Лидерборд / Streak / ЖИ-чат        Пользователи / Статистика
+            │                                   │
+            └──────── packages/shared ──────────┘
+              (Supabase-клиент, Auth, i18n, API)
+                            │
+        ┌───────────────────┼────────────────────┐
+        ↓                   ↓                    ↓
+   Postgres + RLS      RPC-функции         Edge Functions
+   profiles            get_test_questions   ai-chat   → Gemini
+   subjects            submit_test_result   ai-import → DeepSeek / Gemini
+   variants            get_leaderboard …    (ключи ИИ — в секретах Supabase)
+   questions           admin_* …
+   results             publish_import_questions
+   import_jobs / import_questions
+   ai_usage            Storage: test-imports     Auth: email + JWT
 ```
 
-## 2. Фронтенд — структура (`src/`)
+Оба приложения — SPA (React 18 + Vite + TypeScript + Tailwind). Своего сервера нет:
+вся серверная логика живёт в Supabase (RLS, триггеры, RPC, Edge Functions).
+
+## 2. Структура репозитория (npm workspaces)
 
 ```
-src/
-├── App.tsx                      # state-based routing: profile/history/tests/ai/admin
-├── components/
-│   ├── MainLayout.tsx           # sidebar (navy, collapsible) + header + mobile drawer
-│   ├── AuthPage.tsx             # login / register
-│   ├── TestsPage.tsx            # ГЛАВНЫЙ: dashboard → variants → test(экзамен) → result
-│   ├── HistoryPage.tsx          # тарих (дедупликация по варианту, фильтры)
-│   ├── ProfilePage.tsx          # профиль + жетістіктер (бейджтер)
-│   ├── AIChatPage.tsx           # ЖИ-чат (Gemini/DeepSeek)
-│   ├── AdminPage.tsx            # админ: Банк/Импорт/Пользователи/Статистика/Настройки
-│   └── admin/ImportAdmin.tsx    # импорт: drag&drop → прогресс → preview → publish
-├── context/
-│   ├── AuthContext.tsx          # сессия + профиль + роли
-│   ├── SidebarContext.tsx       # сворачивание сайдбара (localStorage)
-├── lib/
+apps/
+├── student/src/
+│   ├── App.tsx                  # state-based routing: tests / history / profile / ai
+│   ├── components/
+│   │   ├── TestsPage.tsx        # ГЛАВНЫЙ: dashboard → variants → test (экзамен) → result
+│   │   ├── HistoryPage.tsx      # история (последняя попытка на вариант, фильтры)
+│   │   ├── ProfilePage.tsx      # профиль + бейджи
+│   │   ├── AIChatPage.tsx       # ЖИ-чат
+│   │   ├── AuthPage.tsx         # вход / регистрация
+│   │   └── MainLayout.tsx       # сайдбар + header + mobile drawer
+│   └── context/SidebarContext.tsx
+├── admin/src/
+│   ├── App.tsx                  # логин → проверка role = 'admin' → AdminPage
+│   ├── AdminPage.tsx            # Банк / Импорт / Пользователи / Статистика / Настройки
+│   ├── admin/ImportAdmin.tsx    # drag&drop → прогресс → preview → publish
+│   └── lib/import/              # парсеры (xlsx/csv/docx/pdf), AI-провайдеры, валидация, тесты
+packages/shared/
+├── src/
 │   ├── supabase.ts              # клиент
-│   ├── localStorage.ts          # запросы к subjects/variants/questions/results
-│   ├── api.ts                   # RPC-обёртки (admin/leaderboard/streak/badges)
-│   ├── aiService.ts             # Gemini chat/объяснения/генерация
-│   ├── ai/openaiCompat.ts       # OpenAI-совместимый клиент (DeepSeek)
-│   └── import/                  # парсеры (xlsx/csv/docx/pdf) + провайдеры + валидация
-├── i18n/                        # react-i18next
+│   ├── context/AuthContext.tsx  # сессия + профиль + роли + блокировка
+│   ├── lib/localStorage.ts      # запросы к subjects/variants/questions/results (название историческое)
+│   ├── api.ts                   # RPC-обёртки (admin / leaderboard / streak / badges)
+│   ├── lib/aiService.ts         # чат, объяснения, генерация — через Edge Functions
+│   ├── lib/sound.ts             # звуки теста (Web Audio)
+│   └── i18n/                    # react-i18next
 └── locales/{kz,ru}/             # common, subjects, test, results, profile, admin, import
+supabase/
+├── 00…11_*.sql                  # схема; запускаются вручную в SQL Editor по порядку
+├── functions/ai-chat, ai-import, send-reminders # Edge Functions (Deno)
+└── migrations/                  # старая история, для нового проекта НЕ используется
 ```
 
-## 3. Основные сценарии — потоки данных
+## 3. Основные сценарии
 
-### Тест тапсыру
+### Прохождение теста
 ```
-Dashboard → пәнді таңдау → variants → тест (fullscreen, таймер 1 мин/сұрақ)
-→ auto-save жауаптар (localStorage) → Аяқтау (модал растау)
-→ saveTestResult → results таблицасы (RLS: өз нәтижелері)
-→ Результат беті (donut-диаграмма, count-up, watermark)
+Dashboard → предмет → варианты
+→ start_test_attempt(variant)            — вопросы БЕЗ правильных ответов + серверный дедлайн попытки
+→ экзамен (fullscreen, таймер 1 мин/вопрос, автосохранение ответов в localStorage)
+→ Завершить → submit_test_result(variant, answers)
+     сервер сам считает балл, пишет строку в results
+     и возвращает { result, answer_key }
+→ страница результата (балл с сервера, разбор ответов по answer_key)
 ```
+Клиент балл не считает и не присылает. Прямой `SELECT` из `questions` и прямой
+`INSERT` в `results` ученику закрыты RLS.
 
-### Импорт тестов
+### Импорт тестов (админ)
 ```
 Файл (xlsx/csv/docx/pdf) → import_jobs (uploaded)
-→ parse (клиент) → AI батчпен (DeepSeek→Gemini→Mock)
-→ validate (needs_review/duplicate) → import_questions (draft/review)
-→ Admin preview/edit → publish → RPC publish_import_questions
-→ questions таблицасына (АТОМАРНО, бір транзакция) + variants.total_score
+→ parse (в браузере) → AI пачками через ai-import (DeepSeek → Gemini → Mock)
+→ validate (needs_review / duplicate) → import_questions (draft / review)
+→ Admin preview/edit → publish_import_questions (одна транзакция)
+→ questions; variants.total_score пересчитывает триггер
 ```
 
 ### Геймификация
 ```
-results → get_user_streak (күндер қатары) → «🔥 N күн»
-results → get_user_badges (COUNT DISTINCT variant) → медальдар
-results → get_leaderboard (DISTINCT ON variant_id) → топ-10 + user_id
+results → get_user_streak   (дни подряд, по времени Алматы)
+results → get_user_badges   (COUNT DISTINCT variant, 90%+, победитель / призёр недели)
+results → get_leaderboard   (зачётные попытки, сумма баллов, топ-10) / get_my_rank
+results → weekly_awards     (топ-3 завершённой недели; подводится при открытии рейтинга,
+                             get_last_week_winners)
 ```
+Заблокированные пользователи в лидерборд не попадают.
+
+### Типы вопросов и полный ЕНТ
+```
+questions.question_type: single | multiple (варианты A–F, ключ ["A","C"]) |
+                         matching (match_left + ключ {"1":"B"}); passages — общий текст
+score_answer(вопрос, ответ) — единственное место подсчёта на сервере
+(зеркало для показа результата — packages/shared/src/lib/answers.ts)
+
+start_full_exam(профильные предметы) → exam_sessions: обязательные предметы + 2 профильных,
+                                        общий дедлайн, вопросы по разделам без ключей
+submit_full_exam → по строке results на каждый раздел (exam_session_id),
+                   поэтому история, рейтинг, темы и работа над ошибками работают без изменений
+```
+
+### Возврат ученика
+```
+вход: email / Google / SMS — кнопки показываются по auth/v1/settings проекта
+ИИ-чат: ai_chats + ai_chat_messages (пишет приложение ученика под своим RLS)
+PWA: manifest + public/sw.js (оболочка сайта, без кэша данных)
+напоминания: push_subscriptions ← save_push_subscription
+             pg_cron → send-reminders → get_streak_reminder_targets → web-push
+```
+
+### ИИ
+```
+браузер → supabase.functions.invoke('ai-chat' | 'ai-import')
+        → проверка JWT, блокировки, роли (ai-import — только админ),
+          лимит 100 запросов/час (ai-chat, таблица ai_usage)
+        → Gemini / DeepSeek
+```
+Ключей ИИ в клиентском коде и `.env` приложений нет.
 
 ## 4. Supabase — ключевые механизмы
 
 | Тип | Имя | Назначение |
 |-----|-----|-----------|
 | Trigger | `handle_new_user` | регистрация → профиль автоматически |
-| Trigger | `make_first_user_admin` | первый user → admin |
-| Trigger | `auto_confirm_email` | авто-подтверждение email |
-| Trigger | `protect_profile_fields` | не-админ не может менять role/is_blocked |
-| Trigger | `validate_result_score` | score ≤ total_score = кол-во вопросов |
-| RPC | `is_admin()` | SECURITY DEFINER — база для всех проверок RLS |
-| RPC | `publish_import_questions` | транзакционная публикация |
-| RLS | profiles/questions/variants/results/import_* | доступ по ролям |
+| Trigger | `make_first_user_admin` | первый пользователь → admin |
+| Trigger | `auto_confirm_user_email` | авто-подтверждение email |
+| Trigger | `protect_profile_fields` | не-админ не может менять role / is_blocked |
+| Trigger | `validate_result_score` | score ≤ total_score = сумма баллов вопросов варианта |
+| Trigger | `results_blocked_check` | заблокированный не может писать результаты |
+| Trigger | `sync_variant_total_score` + `variants_force_total_score` | variants.total_score = сумма баллов вопросов, клиент подменить не может |
+| Trigger | `questions_set_score` | балл вопроса по типу: 1 / 2 / число пар |
+| RPC | `is_admin()` | SECURITY DEFINER — база для проверок RLS |
+| RPC | `start_test_attempt` | старт/продолжение попытки: вопросы без `correct_answer` и дедлайн |
+| RPC | `get_result_review` | разбор своей попытки: вопросы с ключом и ответы ученика |
+| RPC | `get_question_for_explain` | вопрос для объяснения ИИ (только после сдачи варианта) |
+| RPC | `get_my_topic_stats` | статистика ученика по предметам и темам (по первым попыткам) |
+| RPC | `submit_test_result` | серверный подсчёт балла + ключ ответов |
+| RPC | `get_full_exam_options` / `start_full_exam` / `submit_full_exam` | полный ЕНТ из нескольких предметов |
+| RPC | `get_last_week_winners` | топ-3 прошлой недели (заодно подводит итоги недели) |
+| RPC | `save_push_subscription` / `get_streak_reminder_targets` | push-напоминания (вторая — только service role) |
+| RPC | `publish_import_questions` | транзакционная публикация импорта |
+| RPC | `admin_list_users` / `admin_set_user_role` / `admin_toggle_block` / `admin_platform_stats` | админка |
+| RLS | все таблицы | доступ по ролям; `questions` напрямую читает только админ |
 
-## 5. SQL-миграции (`supabase/`)
+## 5. SQL-файлы (`supabase/`, запускать по порядку)
 
 | Файл | Содержимое |
 |------|-----------|
 | `00_new_project_full_schema.sql` | базовые таблицы + триггеры auth + сид |
 | `01_admin_and_gamification.sql` | админ-функции, лидерборд, streak, бейджи |
 | `02_import_system.sql` | import_jobs / import_questions + storage |
-| `03_security_fixes.sql` | защита ролей, валидация результатов, атомарный publish, дедуп |
+| `03_security_fixes.sql` | защита ролей, валидация результатов, атомарный publish |
+| `04_blocked_users_enforcement.sql` | блокировка на уровне БД |
+| `05_submit_test_result.sql` | первая версия RPC сдачи теста (заменена в 08) |
+| `06_total_score_trigger.sql` | авто-пересчёт total_score |
+| `07_ai_usage.sql` | таблица ai_usage для лимита запросов к ИИ |
+| `08_server_side_scoring.sql` | серверный подсчёт балла, скрытие правильных ответов |
+| `09_attempts_and_fair_ranking.sql` | серверные попытки с таймером, рейтинг по первой попытке (`results.is_ranked`), недельный лидерборд, streak по Алматы, разбор ответов, `questions.explanation_*` |
+| `10_bilingual_content.sql` | казахский текст вопроса (`*_kz`), тема, сложность, картинка (bucket `question-images`), публикация импорта с обоими языками, статистика по темам |
+| `11_mistakes_practice.sql` | «работа над ошибками»: `get_my_mistakes`, `record_mistake_practice`, таблица `mistake_practice` |
+| `12_question_types_and_full_ent.sql` | типы вопросов (несколько ответов, соответствие), контекстные тексты, баллы как на ЕНТ, полный ЕНТ (`exam_sessions`) |
+| `13_retention.sql` | профиль при входе через Google / телефон, награды недели, история ИИ-чата, push-подписки |
+| `14_full_ent_spec.sql` | структура ЕНТ (20 / 10 / 10 / 40 / 40 заданий, 140 баллов): `ent_section_spec`, `variant_matches_ent_spec`; полный тест собирается из вариантов в формате ЕНТ |
+| `15_ent_variant_1.sql` | первый вариант в формате ЕНТ по всем 11 предметам (360 заданий, RU + KZ). Собирается из `supabase/seed/ent-variant-1/` командой `node supabase/seed/ent-variant-1/build.mjs` — вручную не править |
 
-## 6. Переменные окружения (`.env`)
+## 6. Конфигурация
 
+`.env` приложений (попадает в браузер — только публичные значения):
 ```
 VITE_SUPABASE_URL=
 VITE_SUPABASE_ANON_KEY=
-VITE_GEMINI_API_KEY=
-VITE_DEEPSEEK_API_KEY=
-VITE_DEEPSEEK_MODEL=deepseek-v4-flash-vision-exp
-VITE_DEEPSEEK_BASE_URL=https://api.b.ai/v1
+# только admin, необязательно: auto | gemini | mock
+VITE_AI_PROVIDER=auto
+# только student, необязательно: публичный VAPID-ключ для push-напоминаний
+VITE_VAPID_PUBLIC_KEY=
 ```
 
-## 7. Направление развития
+Секреты Edge Functions (`supabase secrets set …`):
+```
+GEMINI_API_KEY=
+DEEPSEEK_API_KEY=
+DEEPSEEK_MODEL=deepseek-v4-flash-vision-exp      # необязательно
+DEEPSEEK_BASE_URL=https://api.b.ai/v1            # необязательно
+# send-reminders (нужны только для push-напоминаний)
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+VAPID_SUBJECT=mailto:you@example.com
+CRON_SECRET=
+```
+
+## 7. Известные ограничения
+
+- После первой сдачи ученик видит ключ ответов варианта; пересдача сохраняется, но в рейтинг не идёт.
+- Импорт из файлов создаёт только вопросы с одним ответом; вопросы «несколько ответов»,
+  «соответствие» и контекстные тексты добавляются вручную в форме вопроса.
+- В полном ЕНТ раздел — это целый вариант предмета. По структуре 20 / 10 / 10 / 40 / 40 тест
+  идёт, когда по предмету есть вариант в формате ЕНТ (админка помечает такие варианты);
+  иначе берётся вариант другого размера.
+- Вопросы варианта `15_ent_variant_1.sql` составлены для тренировки и не проходили проверку
+  учителями-предметниками.
+- `ai-import` не ограничен по числу запросов (доступен только админам).
+- Парсинг файлов импорта идёт в браузере; сканы PDF требуют OCR и не поддерживаются.
+
+## 8. Направление развития
 
 ```
-ҚАЗІР: SPA (всё в браузере, AI-ключи на клиенте)
-   │
-   ├─ 1. Backend (Next.js API / Supabase Edge Functions)
-   │     → AI-ключи на сервер, контроль доступа к генерации
-   ├─ 2. Тесты: таймеры/типы (ЕНТ формат), история по баллам
-   ├─ 3. Масштаб: 1000+ вопросов → разделы (sections), категории
-   └─ 4. Аналитика: Radar-график по предметам, динамика результатов
+├─ 1. Импорт вопросов новых типов из файлов
+├─ 2. Банк случайных вопросов против заучивания ключа
+├─ 3. Масштаб: 1000+ вопросов → разделы (sections), категории
+└─ 4. Аналитика: Radar-график по предметам, динамика результатов
 ```

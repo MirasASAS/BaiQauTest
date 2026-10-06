@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Calendar, FileQuestion, X, AlertTriangle, ArrowRight, Calculator, Monitor, Globe2, Leaf, Atom, FlaskConical, MapPin, BookOpen, Globe, PackageOpen, Filter } from 'lucide-react';
 import { useAuth } from '@baiqautest/shared';
 import { useLanguage } from '@baiqautest/shared';
-import { getTestResults } from '@baiqautest/shared';
+import { getAllTestResults, getResultReview } from '@baiqautest/shared';
 import { useSubjectLabel } from '@baiqautest/shared';
-import type { TestResult, Variant, Subject } from '@baiqautest/shared';
+import type { TestResult, Variant, Subject, ReviewQuestion, AnswerValue } from '@baiqautest/shared';
+import { ReviewItem } from './ReviewItem';
 
 type ResultWithDetails = TestResult & { variants: Variant; subjects: Subject };
 
@@ -47,6 +49,32 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
   const [subjectFilter, setSubjectFilter] = useState<'all' | number>('all');
   const [sortBy, setSortBy] = useState<'date' | 'score'>('date');
   const loadIdRef = useRef(0);
+  const { t: tRes } = useTranslation('results');
+  // Разбор выбранной попытки: вопросы с ключом + ответы ученика (RPC get_result_review)
+  const [review, setReview] = useState<{ questions: ReviewQuestion[]; answers: Record<string, AnswerValue> | null } | null>(null);
+  const [reviewState, setReviewState] = useState<'idle' | 'loading' | 'error'>('idle');
+
+  useEffect(() => {
+    setReview(null);
+    if (!selected) {
+      setReviewState('idle');
+      return;
+    }
+    let active = true;
+    setReviewState('loading');
+    getResultReview(selected.id)
+      .then(data => {
+        if (!active) return;
+        setReview({ questions: data.questions, answers: data.result.answers ?? null });
+        setReviewState('idle');
+      })
+      .catch(err => {
+        if (!active) return;
+        console.error('Error loading review:', err);
+        setReviewState('error');
+      });
+    return () => { active = false; };
+  }, [selected]);
 
   useEffect(() => {
     if (user) {
@@ -60,7 +88,7 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
     setLoading(true);
     setError(null);
     try {
-      const data = await getTestResults(user.id);
+      const data = await getAllTestResults(user.id);
       if (id !== loadIdRef.current) return;
       setResults(Array.isArray(data) ? data : []);
     } catch (err) {
@@ -184,7 +212,7 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
               {subjectOptions.map(id => {
                 const s = results.find(r => r.variants?.subject_id === id)?.subjects;
                 return (
-                  <option key={id} value={id}>{s?.name || `#${id}`}</option>
+                  <option key={id} value={id}>{s?.name ? subjectLabel(s.name) : `#${id}`}</option>
                 );
               })}
             </select>
@@ -223,6 +251,12 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
                           <span className="text-gray-300">|</span>
                           <Calendar className="w-4 h-4" />
                           {formatDate(result.taken_at)}
+                          {result.exam_session_id != null && (
+                            <span className="px-2 py-0.5 rounded-md bg-blue-50 text-[#2563eb] text-xs font-bold">{tRes('fullExamBadge')}</span>
+                          )}
+                          {result.is_ranked === false && (
+                            <span className="px-2 py-0.5 rounded-md bg-gray-100 text-gray-500 text-xs font-medium">{tRes('unranked')}</span>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -256,7 +290,7 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
           className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"
           onClick={() => setSelected(null)}
         >
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-lg font-bold text-gray-900">
                 {language === 'kz' ? 'Тест нәтижесі' : 'Результат теста'}
@@ -269,7 +303,7 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
             <div className="space-y-4">
               <div className="flex items-center justify-between px-4 py-3 bg-gray-50 rounded-xl">
                 <span className="text-sm text-gray-500">{language === 'kz' ? 'Бөлім' : 'Раздел'}</span>
-                <span className="font-semibold text-gray-900">{selected.subjects?.name || `#${selected.variant_id}`}</span>
+                <span className="font-semibold text-gray-900">{selected.subjects?.name ? subjectLabel(selected.subjects.name) : `#${selected.variant_id}`}</span>
               </div>
               <div className="flex items-center justify-between px-4 py-3 bg-gray-50 rounded-xl">
                 <span className="text-sm text-gray-500">{language === 'kz' ? 'Нұсқа' : 'Вариант'}</span>
@@ -301,6 +335,37 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
                   />
                 </div>
               </div>
+              <div className="flex items-center justify-between px-4 py-3 bg-gray-50 rounded-xl">
+                <span className="text-sm text-gray-500">{language === 'kz' ? 'Рейтинг' : 'Рейтинг'}</span>
+                <span className={`font-semibold ${selected.is_ranked === false ? 'text-gray-500' : 'text-green-600'}`}>
+                  {tRes(selected.is_ranked === false ? 'unranked' : 'ranked')}
+                </span>
+              </div>
+            </div>
+
+            {/* Разбор ответов */}
+            <div className="mt-5 border border-gray-200 rounded-xl overflow-hidden">
+              <div className="px-5 py-3 bg-blue-50 font-bold text-sm text-gray-700">{tRes('reviewTitle')}</div>
+              {reviewState === 'loading' && (
+                <p className="px-5 py-4 text-sm text-gray-500">{tRes('reviewLoading')}</p>
+              )}
+              {reviewState === 'error' && (
+                <p className="px-5 py-4 text-sm text-red-500">{tRes('reviewError')}</p>
+              )}
+              {review && (
+                <div className="divide-y divide-gray-100">
+                  {review.questions.map((q, i) => (
+                    <ReviewItem
+                      key={q.id}
+                      question={q}
+                      index={i}
+                      userAnswer={review.answers?.[q.id] ?? null}
+                      language={language}
+                      tRes={tRes}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
 
             <button

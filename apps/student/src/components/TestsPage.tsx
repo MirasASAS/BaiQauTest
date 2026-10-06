@@ -1,17 +1,21 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { motion, AnimatePresence, animate } from 'framer-motion';
-import { CheckCircle, X, AlertCircle, Check, Trophy, FileQuestion, Calculator, Monitor, Globe, Globe2, Leaf, Atom, FlaskConical, MapPin, BookOpen, ArrowLeft, Loader2, Sparkles, ArrowRight, Menu, User, Layers, Grid3x3, Droplets, RotateCcw, ChevronLeft, ChevronDown, Clock } from 'lucide-react';
+import { motion, animate } from 'framer-motion';
+import { CheckCircle, AlertCircle, Check, Trophy, FileQuestion, Calculator, Monitor, Globe, Globe2, Leaf, Atom, FlaskConical, MapPin, BookOpen, ArrowLeft, Loader2, Sparkles, RotateCcw, ChevronDown, GraduationCap, Sigma, BookText } from 'lucide-react';
 import { useAuth } from '@baiqautest/shared';
 import { useLanguage } from '@baiqautest/shared';
 import { LanguageSwitcher } from '@baiqautest/shared';
-import { getSubjects, getVariants, getVariantsBySubjectId, getQuestionsByVariantId, getTestResultByVariant, saveTestResult, getUserStats } from '@baiqautest/shared';
-import { getStudyRecommendation, isAIConfigured, explainQuestion, playCorrect, playWrong, playFinish } from '@baiqautest/shared';
-import { getLeaderboard, getMyRank, getUserStreak, type LeaderboardEntry, type MyRank } from '@baiqautest/shared';
-import { useSubjectLabel } from '@baiqautest/shared';
-import type { Subject, Variant, Question } from '@baiqautest/shared';
+import { getSubjects, getVariants, getVariantsBySubjectId, getQuestionsByVariantId, startTestAttempt, getTestResultByVariant, saveTestResult, getUserStats } from '@baiqautest/shared';
+import { getStudyRecommendation, playSelect, playFinish } from '@baiqautest/shared';
+import { getLeaderboard, getMyRank, getUserStreak, getMyTopicStats, getMyMistakes, getLastWeekWinners, getOpenFullExam, type LeaderboardEntry, type LeaderboardPeriod, type MyRank, type TopicStat, type MistakesSummary, type WeekWinner } from '@baiqautest/shared';
+import { useSubjectLabel, isAnswered, scoreAnswer, maxScore, formatAnswer, withAnswerKey } from '@baiqautest/shared';
+import type { Subject, Variant, TestQuestion, AnswerValue } from '@baiqautest/shared';
+import { ReviewItem } from './ReviewItem';
+import { ExamScreen } from './ExamScreen';
+import { MistakesPractice } from './MistakesPractice';
+import { FullExam } from './FullExam';
 
-type Stage = 'dashboard' | 'variants' | 'test' | 'result';
+type Stage = 'dashboard' | 'variants' | 'test' | 'result' | 'mistakes' | 'fullExam';
 
 // Deterministic numeric code from a UUID (used as user ID on the result page)
 function deriveCode(id: string): string {
@@ -38,137 +42,6 @@ function CountUp({ value, duration = 1 }: { value: number; duration?: number }) 
   return <>{display}</>;
 }
 
-// Circular countdown timer
-function CircularTimer({ seconds, total }: { seconds: number; total: number }) {
-  const r = 16;
-  const c = 2 * Math.PI * r;
-  const pct = total > 0 ? Math.max(0, Math.min(1, seconds / total)) : 0;
-  const isDanger = seconds <= 60;
-  const isWarn = seconds <= 300;
-  const color = isDanger ? '#ef4444' : isWarn ? '#f59e0b' : '#38bdf8';
-  const mm = Math.floor(seconds / 60).toString().padStart(2, '0');
-  const ss = (seconds % 60).toString().padStart(2, '0');
-  return (
-    <div className="relative w-11 h-11 flex-shrink-0" role="timer" aria-label={`${mm}:${ss}`}>
-      <svg viewBox="0 0 40 40" className="w-11 h-11 -rotate-90">
-        <circle cx="20" cy="20" r={r} fill="none" stroke="#334155" strokeWidth="4" opacity="0.35" />
-        <circle
-          cx="20" cy="20" r={r} fill="none" stroke={color} strokeWidth="4" strokeLinecap="round"
-          strokeDasharray={c} strokeDashoffset={c * (1 - pct)}
-          className={isDanger ? 'animate-pulse' : ''}
-          style={{ transition: 'stroke-dashoffset 1s linear, stroke 0.3s ease' }}
-        />
-      </svg>
-      <span className={`absolute inset-0 flex items-center justify-center text-[10px] font-bold ${
-        isDanger ? 'text-red-400' : isWarn ? 'text-amber-300' : 'text-white'
-      }`}>
-        {mm}:{ss}
-      </span>
-    </div>
-  );
-}
-
-// Per-question review item (own state — valid separate component)
-function ReviewItem({
-  question,
-  index,
-  userAnswer,
-  subjectName,
-  language,
-  tRes,
-}: {
-  question: Question;
-  index: number;
-  userAnswer: string | null;
-  subjectName: string;
-  language: 'kz' | 'ru';
-  tRes: (key: string) => string;
-}) {
-  const [explainState, setExplainState] = useState<'idle' | 'loading' | 'done'>('idle');
-  const [explainText, setExplainText] = useState('');
-
-  const isCorrect = userAnswer === question.correct_answer;
-
-  return (
-    <div className="px-5 py-4">
-      <div className="flex items-start gap-3">
-        <span className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
-          userAnswer === null
-            ? 'bg-slate-100 text-slate-400'
-            : isCorrect
-            ? 'bg-green-100 text-green-700'
-            : 'bg-red-100 text-red-700'
-        }`}>
-          {userAnswer === null ? '–' : isCorrect ? '✓' : '✗'}
-        </span>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-gray-800 mb-2">
-            {index + 1}. {question.question_text}
-          </p>
-          <div className="grid grid-cols-2 gap-1.5 mb-2">
-            {(['A', 'B', 'C', 'D'] as const).map(opt => {
-              const optText = question[`option_${opt.toLowerCase() as 'a' | 'b' | 'c' | 'd'}`];
-              const isUserAns = userAnswer === opt;
-              const isCorrectAns = question.correct_answer === opt;
-              return (
-                <div key={opt} className={`px-3 py-1.5 rounded-lg text-xs border ${
-                  isUserAns && isCorrectAns
-                    ? 'bg-green-50 border-green-200 text-green-700'
-                    : isUserAns && !isCorrectAns
-                    ? 'bg-red-50 border-red-200 text-red-600'
-                    : isCorrectAns
-                    ? 'bg-green-50/50 border-green-100 text-green-600'
-                    : 'bg-white border-gray-200 text-gray-600'
-                } ${isUserAns ? 'font-bold' : ''}`}>
-                  <span className="font-semibold mr-1">{opt})</span>{optText}
-                </div>
-              );
-            })}
-          </div>
-          <div className="flex items-center gap-2 text-xs">
-            <span className="text-gray-400">
-              {tRes('yourAnswer')}: <span className={`font-bold ${userAnswer ? (isCorrect ? 'text-green-600' : 'text-red-500') : 'text-gray-400'}`}>{userAnswer || tRes('noAnswer')}</span>
-            </span>
-            <span className="text-gray-300">·</span>
-            <span className="text-gray-400">
-              {tRes('correctAnswerShort')}: <span className="font-bold text-green-600">{question.correct_answer}</span>
-            </span>
-          </div>
-          <button
-            onClick={async () => {
-              if (explainState !== 'idle') return;
-              setExplainState('loading');
-              try {
-                const text = await explainQuestion(
-                  question.question_text,
-                  { a: question.option_a, b: question.option_b, c: question.option_c, d: question.option_d },
-                  question.correct_answer,
-                  userAnswer || '—',
-                  subjectName,
-                  language,
-                );
-                setExplainText(text);
-              } catch {
-                setExplainText(language === 'kz' ? 'Түсіндіру қатесі' : 'Ошибка объяснения');
-              }
-              setExplainState('done');
-            }}
-            className="mt-2 flex items-center gap-1.5 text-xs text-blue-500 hover:text-blue-700 font-medium transition-colors"
-          >
-            <Sparkles className="w-3 h-3" />
-            {explainState === 'loading' ? tRes('explaining') : tRes('explainThis')}
-          </button>
-          {explainText && (
-            <div className="mt-2 p-3 bg-blue-50 rounded-lg text-xs text-gray-700 leading-relaxed">
-              {explainText}
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function TestsPage() {
   const { user, profile } = useAuth();
   const { t, language } = useLanguage();
@@ -177,19 +50,30 @@ export function TestsPage() {
   const [selectedSubject, setSelectedSubject] = useState<Subject | null>(null);
   const [variants, setVariants] = useState<Variant[]>([]);
   const [selectedVariant, setSelectedVariant] = useState<Variant | null>(null);
-  const [questions, setQuestions] = useState<Question[]>([]);
+  const [questions, setQuestions] = useState<TestQuestion[]>([]);
   const [currentQuestion, setCurrentQuestion] = useState(0);
-  const [answers, setAnswers] = useState<Record<number, string>>({});
+  const [answers, setAnswers] = useState<Record<number, AnswerValue>>({});
   const [score, setScore] = useState(0);
+  // Максимум баллов сданной попытки (сумма баллов вопросов, а не их количество)
+  const [resultTotal, setResultTotal] = useState(0);
+  // Победители прошлой недели и незавершённый полный ЕНТ
+  const [weekWinners, setWeekWinners] = useState<WeekWinner[]>([]);
+  const [hasOpenFullExam, setHasOpenFullExam] = useState(false);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({ testsCompleted: 0, averageScore: 0, bestResult: 0 });
   const [aiRecommendation, setAiRecommendation] = useState<string>('');
   const [loadingRecommendation, setLoadingRecommendation] = useState(false);
   const [variantResults, setVariantResults] = useState<Record<number, { score: number; total_score: number } | null>>({});
+  // Число заданий варианта: total_score — это сумма баллов, а не количество вопросов
+  const [variantCounts, setVariantCounts] = useState<Record<number, number>>({});
   const [showAnswerCard, setShowAnswerCard] = useState(false);
   const [streak, setStreak] = useState(0);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [myRank, setMyRank] = useState<MyRank | null>(null);
+  const [lbPeriod, setLbPeriod] = useState<LeaderboardPeriod>('all');
+  const [topicStats, setTopicStats] = useState<TopicStat[]>([]);
+  const [mistakes, setMistakes] = useState<MistakesSummary | null>(null);
+  const [mistakesSubjectId, setMistakesSubjectId] = useState<number | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const subjectLabel = useSubjectLabel();
   const { t: tTest } = useTranslation('test');
@@ -198,7 +82,13 @@ export function TestsPage() {
   const [showFinishConfirm, setShowFinishConfirm] = useState(false);
   const [timeUp, setTimeUp] = useState(false);
   const [offline, setOffline] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const finishingRef = useRef(false);
+  // Дедлайн попытки по часам устройства; сам срок задаёт сервер (start_test_attempt)
+  const deadlineRef = useRef(0);
+  const [attemptId, setAttemptId] = useState<number | null>(null);
+  // null — результата ещё нет; false — попытка сохранена, но в рейтинг не идёт
+  const [resultRanked, setResultRanked] = useState<boolean | null>(null);
 
   const subjectIcons: Record<string, typeof Calculator> = {
     math: Calculator,
@@ -210,6 +100,8 @@ export function TestsPage() {
     biology: Leaf,
     geography: MapPin,
     english: Globe,
+    math_literacy: Sigma,
+    reading_literacy: BookText,
   };
 
   function getSubjectIcon(name: string): typeof Calculator {
@@ -227,16 +119,6 @@ export function TestsPage() {
     'bg-emerald-100 text-emerald-600',
     'bg-orange-100 text-orange-600',
   ];
-
-  function getOptionText(question: Question, option: string): string {
-    switch (option) {
-      case 'A': return question.option_a;
-      case 'B': return question.option_b;
-      case 'C': return question.option_c;
-      case 'D': return question.option_d;
-      default: return '';
-    }
-  }
 
   useEffect(() => {
     let active = true;
@@ -270,10 +152,26 @@ export function TestsPage() {
 
   // Load AI recommendation when stats change
   useEffect(() => {
-    if (stage === 'dashboard' && isAIConfigured() && stats.testsCompleted > 0 && !aiRecommendation) {
+    if (stage === 'dashboard' && stats.testsCompleted > 0 && !aiRecommendation) {
       loadRecommendation();
     }
   }, [stats, stage]);
+
+  // Статистика по темам для блока «Слабые темы»
+  useEffect(() => {
+    if (stage !== 'dashboard' || !user) return;
+    let active = true;
+    getMyTopicStats()
+      .then(rows => { if (active) setTopicStats(rows); })
+      .catch(() => { /* SQL 10 ещё не применён — блок просто не показываем */ });
+    getMyMistakes(null, 1)
+      .then(data => { if (active) setMistakes(data); })
+      .catch(() => { /* SQL 11 ещё не применён — блок просто не показываем */ });
+    getOpenFullExam(user.id)
+      .then(session => { if (active) setHasOpenFullExam(!!session); })
+      .catch(() => { /* SQL 12 ещё не применён */ });
+    return () => { active = false; };
+  }, [stage, user]);
 
   // Load streak + leaderboard on dashboard
   useEffect(() => {
@@ -281,19 +179,22 @@ export function TestsPage() {
     let active = true;
     (async () => {
       try {
-        const [s, lb, rank] = await Promise.all([
+        const [s, lb, rank, winners] = await Promise.all([
           getUserStreak().catch(() => 0),
-          getLeaderboard().catch(() => []),
-          getMyRank().catch(() => null),
+          getLeaderboard(lbPeriod).catch(() => []),
+          getMyRank(lbPeriod).catch(() => null),
+          // SQL 13 ещё не применён — блок победителей просто не показываем
+          getLastWeekWinners().catch(() => []),
         ]);
         if (!active) return;
         setStreak(s);
         setLeaderboard(lb);
         setMyRank(rank);
+        setWeekWinners(winners);
       } catch { /* ignore */ }
     })();
     return () => { active = false; };
-  }, [stage]);
+  }, [stage, lbPeriod]);
 
   async function loadRecommendation() {
     setLoadingRecommendation(true);
@@ -324,6 +225,17 @@ export function TestsPage() {
         });
         setVariantResults(results);
       }
+
+      // Количество заданий считаем по самим вопросам; не загрузилось — карточка покажет только баллы
+      setVariantCounts({});
+      Promise.allSettled(variantsData.map(v => getQuestionsByVariantId(v.id))).then(settled => {
+        const counts: Record<number, number> = {};
+        variantsData.forEach((v, i) => {
+          const item = settled[i];
+          if (item.status === 'fulfilled') counts[v.id] = item.value.length;
+        });
+        setVariantCounts(counts);
+      });
       
       setStage('variants');
     } catch (err) {
@@ -336,7 +248,13 @@ export function TestsPage() {
     setLoading(true);
     finishingRef.current = false;
     try {
-      const questionsData = await getQuestionsByVariantId(variant.id);
+      // Сервер создаёт попытку или возвращает незавершённую — с оставшимся временем
+      const { attempt, questions: questionsData, msLeft } = await startTestAttempt(variant.id);
+      deadlineRef.current = Date.now() + msLeft;
+      setAttemptId(attempt?.id ?? null);
+      setTimeLeft(Math.ceil(msLeft / 1000));
+      setTimeUp(false);
+      setResultRanked(null);
       setQuestions(questionsData);
       setSelectedVariant(variant);
       setStage('test');
@@ -365,25 +283,15 @@ export function TestsPage() {
     }
   }
 
-  // Exam countdown timer (1 minute per question)
-  const timerInitRef = useRef(false);
+  // Exam countdown: отсчёт до серверного дедлайна попытки (1 минута на вопрос).
+  // Время считается от дедлайна, а не тиками, поэтому свёрнутая вкладка его не «замораживает».
   useEffect(() => {
-    if (stage !== 'test') {
-      timerInitRef.current = false;
-      return;
-    }
-    if (questions.length > 0 && !finishingRef.current && !timerInitRef.current) {
-      timerInitRef.current = true;
-      setTimeLeft(questions.length * 60);
-      setTimeUp(false);
-    }
-  }, [stage, questions.length]);
-
-  useEffect(() => {
-    if (stage !== 'test' || timeLeft <= 0) return;
-    const t = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
+    if (stage !== 'test' || attemptId === null) return;
+    const tick = () => setTimeLeft(Math.max(0, Math.ceil((deadlineRef.current - Date.now()) / 1000)));
+    tick();
+    const t = setInterval(tick, 1000);
     return () => clearInterval(t);
-  }, [stage, timeLeft]);
+  }, [stage, attemptId]);
 
   // Auto-submit when time runs out (только если таймер реально тикал, а не 0 изначально)
   const prevTimeRef = useRef(-1);
@@ -434,37 +342,15 @@ export function TestsPage() {
     }
   }, [stage, selectedVariant, user?.id]);
 
-  // Keyboard navigation: 1-4 select answer, Enter next
-  useEffect(() => {
-    if (stage !== 'test') return;
-    const handler = (e: KeyboardEvent) => {
-      const key = e.key;
-      if (key >= '1' && key <= '4') {
-        const option = (['A', 'B', 'C', 'D'] as const)[Number(key) - 1];
-        if (option) selectAnswer(option);
-      } else if (key === 'Enter') {
-        e.preventDefault();
-        if (currentQuestion < questions.length - 1) {
-          setCurrentQuestion(p => Math.min(questions.length - 1, p + 1));
-        } else {
-          setShowFinishConfirm(true);
-        }
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [stage, currentQuestion, questions.length, answers]);
-
-  function selectAnswer(answer: string) {
-    const wasAnswered = answers[currentQuestion];
-    setAnswers(prev => ({ ...prev, [currentQuestion]: answer }));
-    if (answer !== wasAnswered) {
-      if (answer === questions[currentQuestion]?.correct_answer) {
-        playCorrect();
-      } else {
-        playWrong();
-      }
-    }
+  function selectAnswer(answer: AnswerValue | null) {
+    setAnswers(prev => {
+      const next = { ...prev };
+      if (answer === null) delete next[currentQuestion];
+      else next[currentQuestion] = answer;
+      return next;
+    });
+    // Верность ответа во время теста неизвестна (ключ приходит с сервера после сдачи)
+    if (answer !== null && formatAnswer(answer) !== formatAnswer(answers[currentQuestion])) playSelect();
   }
 
   function goBackToVariants() {
@@ -476,45 +362,43 @@ export function TestsPage() {
   }
 
   async function finishTest() {
-    if (finishingRef.current) return;
+    if (finishingRef.current || !selectedVariant) return;
     finishingRef.current = true;
     setShowFinishConfirm(false);
+    setSubmitError(null);
 
-    let finalScore = 0;
+    const answersById: Record<string, AnswerValue> = {};
     questions.forEach((q, i) => {
-      if (answers[i] === q.correct_answer) {
-        finalScore++;
-      }
+      if (isAnswered(answers[i])) answersById[q.id] = answers[i];
     });
-    setScore(finalScore);
 
-    if (user && selectedVariant) {
-      try {
-        const answersById: Record<string, string> = {};
-        questions.forEach((q, i) => {
-          if (answers[i]) answersById[q.id] = answers[i];
-        });
-        await saveTestResult({
-          student_id: user.id,
-          variant_id: selectedVariant.id,
-          score: finalScore,
-          total_score: selectedVariant.total_score,
-          answers: answersById,
-        });
-        // Refresh stats
-        const userStats = await getUserStats(user.id);
-        setStats(userStats);
-        playFinish();
-      } catch (err) {
-        console.error('Error saving result:', err);
-      }
-    } else {
-      playFinish();
-    }
     try {
-      if (selectedVariant) localStorage.removeItem(`exam_answers_${user?.id ?? 'guest'}_${selectedVariant.id}`);
+      // Балл считает сервер; вместе с результатом приходит ключ правильных ответов
+      const { result, answerKey } = await saveTestResult({
+        variant_id: selectedVariant.id,
+        answers: answersById,
+      });
+      setScore(result.score);
+      setResultTotal(result.total_score);
+      setResultRanked(result.is_ranked !== false);
+      setQuestions(prev => prev.map(q => withAnswerKey(q, answerKey[q.id])));
+    } catch (err) {
+      // Не сохранилось — остаёмся в тесте, ответы лежат в localStorage, можно повторить
+      console.error('Error saving result:', err);
+      finishingRef.current = false;
+      setTimeUp(false);
+      setSubmitError(err instanceof Error ? err.message : String(err));
+      return;
+    }
+
+    playFinish();
+    try {
+      localStorage.removeItem(`exam_answers_${user?.id ?? 'guest'}_${selectedVariant.id}`);
     } catch { /* ignore */ }
     setStage('result');
+    if (user) {
+      getUserStats(user.id).then(setStats).catch(() => { /* ignore */ });
+    }
   }
 
   function reset() {
@@ -531,6 +415,9 @@ export function TestsPage() {
     setShowAnswerCard(false);
     setShowFinishConfirm(false);
     setTimeUp(false);
+    setSubmitError(null);
+    setAttemptId(null);
+    setResultRanked(null);
     loadInitialData();
   }
 
@@ -601,8 +488,8 @@ export function TestsPage() {
           </motion.div>
         </div>
 
-        {/* AI Recommendation Card */}
-        {isAIConfigured() && (
+        {/* AI Recommendation Card (скрыта, если ИИ недоступен и показать нечего) */}
+        {(loadingRecommendation || aiRecommendation || stats.testsCompleted === 0) && (
           <div className="mb-8 bg-gradient-to-r from-violet-50 to-indigo-50 rounded-2xl border border-violet-100 p-5">
             <div className="flex items-center gap-3 mb-3">
               <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-indigo-600 flex items-center justify-center">
@@ -627,6 +514,74 @@ export function TestsPage() {
           </div>
         )}
 
+        {/* Работа над ошибками */}
+        {mistakes && mistakes.total > 0 && (
+          <div className="mb-8 card p-5">
+            <div className="flex items-start justify-between gap-4 flex-wrap">
+              <div className="min-w-0">
+                <h2 className="text-lg font-bold text-gray-900">{tTest('mistakesTitle')}</h2>
+                <p className="text-sm text-gray-500 mt-1">{tTest('mistakesDesc', { count: mistakes.total })}</p>
+              </div>
+              <button
+                onClick={() => { setMistakesSubjectId(null); setStage('mistakes'); }}
+                className="flex-shrink-0 px-5 py-2.5 bg-[#2563eb] hover:bg-[#1e3a8a] text-white font-bold rounded-xl"
+              >
+                {tTest('mistakesStart')}
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-2 mt-4">
+              {mistakes.by_subject.map(item => (
+                <button
+                  key={item.subject_id}
+                  onClick={() => { setMistakesSubjectId(item.subject_id); setStage('mistakes'); }}
+                  className="px-3 py-1.5 rounded-xl bg-red-50 border border-red-100 text-sm text-red-700 font-medium hover:bg-red-100"
+                >
+                  {subjectLabel(item.subject)} · {item.count}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Слабые темы: до 5 тем с долей верных ответов ниже 70% (минимум 3 вопроса по теме) */}
+        {(() => {
+          const weak = topicStats
+            .filter(r => r.topic && r.total >= 3)
+            .map(r => ({ ...r, percent: Math.round((r.correct / r.total) * 100) }))
+            .filter(r => r.percent < 70)
+            .sort((a, b) => a.percent - b.percent)
+            .slice(0, 5);
+          if (weak.length === 0) return null;
+          return (
+            <div className="mb-8 card p-5">
+              <div className="flex items-center gap-2 mb-1">
+                <AlertCircle className="w-5 h-5 text-amber-500" />
+                <h2 className="text-lg font-bold text-gray-900">{tTest('weakTopics')}</h2>
+              </div>
+              <p className="text-sm text-gray-500 mb-4">{tTest('weakTopicsDesc')}</p>
+              <div className="space-y-3">
+                {weak.map(r => (
+                  <div key={`${r.subject}:${r.topic}`}>
+                    <div className="flex items-center justify-between gap-3 text-sm mb-1">
+                      <span className="min-w-0 truncate">
+                        <span className="font-medium text-gray-900">{r.topic}</span>
+                        <span className="text-gray-400"> · {subjectLabel(r.subject)}</span>
+                      </span>
+                      <span className="flex-shrink-0 font-bold text-gray-700">{r.correct}/{r.total} · {r.percent}%</span>
+                    </div>
+                    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${r.percent < 40 ? 'bg-red-500' : 'bg-amber-500'}`}
+                        style={{ width: `${r.percent}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* Subjects Section */}
         {loadError ? (
           <div className="card p-10 text-center">
@@ -648,6 +603,23 @@ export function TestsPage() {
           </div>
         ) : (
           <div>
+            {/* Полный ЕНТ: несколько предметов в одной попытке */}
+            <div className="mb-8 rounded-2xl bg-gradient-to-r from-[#1e3a8a] to-[#2563eb] text-white p-5 sm:p-6 flex items-center gap-4 flex-wrap">
+              <div className="w-14 h-14 rounded-2xl bg-white/15 flex items-center justify-center flex-shrink-0">
+                <GraduationCap className="w-8 h-8" />
+              </div>
+              <div className="flex-1 min-w-[200px]">
+                <h2 className="text-xl font-bold">{tTest('fullExamTitle')}</h2>
+                <p className="text-sm text-blue-100 mt-1">{tTest(hasOpenFullExam ? 'fullExamResumeDesc' : 'fullExamDesc')}</p>
+              </div>
+              <button
+                onClick={() => setStage('fullExam')}
+                className="flex-shrink-0 px-6 py-3 bg-white text-[#1e3a8a] font-bold rounded-xl hover:bg-blue-50"
+              >
+                {tTest(hasOpenFullExam ? 'fullExamResume' : 'fullExamStart')}
+              </button>
+            </div>
+
             <h2 className="text-xl font-bold text-gray-900 mb-4">{t('selectSubject')}</h2>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               {subjects.map(subject => {
@@ -674,15 +646,50 @@ export function TestsPage() {
         )}
 
         {/* Leaderboard */}
-        {leaderboard.length > 0 && (
+        {(leaderboard.length > 0 || lbPeriod === 'week') && (
           <div className="mt-8">
-            <div className="flex items-center gap-2 mb-4">
+            <div className="flex items-center gap-2 mb-4 flex-wrap">
               <Trophy className="w-5 h-5 text-amber-500" />
               <h2 className="text-xl font-bold text-gray-900">
                 {language === 'kz' ? 'Лидерборд' : 'Лидерборд'}
               </h2>
+              <div className="ml-auto flex items-center gap-1 bg-gray-100 rounded-xl p-1">
+                {(['all', 'week'] as const).map(period => (
+                  <button
+                    key={period}
+                    onClick={() => setLbPeriod(period)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                      lbPeriod === period ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    {tTest(period === 'all' ? 'lbAll' : 'lbWeek')}
+                  </button>
+                ))}
+              </div>
             </div>
+            {weekWinners.length > 0 && (
+              <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <p className="text-sm font-bold text-amber-900 mb-2">👑 {tTest('lastWeekWinners')}</p>
+                <div className="flex flex-wrap gap-2">
+                  {weekWinners.map(w => (
+                    <span
+                      key={w.place}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm bg-white border ${
+                        user && w.user_id === user.id ? 'border-[#2563eb] text-[#1e3a8a] font-bold' : 'border-amber-200 text-gray-800 font-medium'
+                      }`}
+                    >
+                      {w.place === 1 ? '🥇' : w.place === 2 ? '🥈' : '🥉'} {w.nickname}
+                      <span className="text-gray-400 font-normal">· {w.points} {tTest('points')}</span>
+                    </span>
+                  ))}
+                </div>
+                <p className="text-xs text-amber-800/80 mt-2">{tTest('weekPrizeHint')}</p>
+              </div>
+            )}
             <div className="card p-2 divide-y divide-gray-100">
+              {leaderboard.length === 0 && (
+                <p className="px-4 py-6 text-sm text-gray-500 text-center">{tTest('lbEmptyWeek')}</p>
+              )}
               {leaderboard.map((entry, i) => {
                 const isMe = user && entry.user_id === user.id;
                 return (
@@ -700,8 +707,8 @@ export function TestsPage() {
                       <p className="text-xs text-gray-500">{entry.tests_count} {tTest('tests')}</p>
                     </div>
                     <div className="flex items-center gap-4 flex-shrink-0">
-                      <span className="text-sm text-gray-400 hidden sm:inline">{tTest('best')}: {entry.best_percent}%</span>
-                      <span className="text-sm font-bold text-gray-900">{entry.avg_percent}%</span>
+                      <span className="text-sm text-gray-400 hidden sm:inline">{entry.avg_percent}%</span>
+                      <span className="text-sm font-bold text-gray-900">{entry.total_points} {tTest('points')}</span>
                     </div>
                   </div>
                 );
@@ -713,7 +720,7 @@ export function TestsPage() {
                     <p className="font-medium text-gray-900 truncate">{myRank.nickname} <span className="text-xs text-[#2563eb] font-bold">({tTest('you')})</span></p>
                     <p className="text-xs text-gray-500">{myRank.tests_count} {tTest('tests')}</p>
                   </div>
-                  <span className="text-sm font-bold text-gray-900 flex-shrink-0">{myRank.avg_percent}%</span>
+                  <span className="text-sm font-bold text-gray-900 flex-shrink-0">{myRank.total_points} {tTest('points')}</span>
                 </div>
               )}
             </div>
@@ -789,10 +796,12 @@ export function TestsPage() {
                     </div>
 
                     <div className="flex gap-6 text-sm text-gray-600 mb-5">
-                      <div className="flex items-center gap-2">
-                        <FileQuestion className="w-4 h-4 text-gray-400" />
-                        <span>{variant.total_score} {tTest('questions')}</span>
-                      </div>
+                      {variantCounts[variant.id] !== undefined && (
+                        <div className="flex items-center gap-2">
+                          <FileQuestion className="w-4 h-4 text-gray-400" />
+                          <span>{variantCounts[variant.id]} {tTest('questions')}</span>
+                        </div>
+                      )}
                       <div className="flex items-center gap-2">
                         <Trophy className="w-4 h-4 text-gray-400" />
                         <span>{variant.total_score} {tTest('points')}</span>
@@ -827,7 +836,8 @@ export function TestsPage() {
                 <RotateCcw className="w-6 h-6 text-blue-500" />
               </div>
               <h3 className="text-lg font-bold text-gray-900 mb-2">{t('retakeConfirmTitle')}</h3>
-              <p className="text-gray-500 text-sm mb-6">{t('retakeConfirmDesc')}</p>
+              <p className="text-gray-500 text-sm mb-2">{t('retakeConfirmDesc')}</p>
+              <p className="text-amber-600 text-xs mb-6">{tRes('retakeNotRanked')}</p>
               <div className="flex gap-3">
                 <button
                   onClick={() => setShowRetakeConfirm(false)}
@@ -849,338 +859,60 @@ export function TestsPage() {
     );
   }
 
+  if (stage === 'mistakes') {
+    return <MistakesPractice subjectId={mistakesSubjectId} onClose={reset} />;
+  }
+
+  if (stage === 'fullExam') {
+    return <FullExam onClose={reset} />;
+  }
+
   // ── Full-screen exam (testcenter.kz style) ──────────────────────────────────
   if (stage === 'test' && selectedVariant) {
-    if (loading) {
-      return (
-        <div className="fixed inset-0 z-50 bg-slate-100 flex items-center justify-center">
-          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#2563eb]" />
-        </div>
-      );
-    }
-
-    if (questions.length === 0) {
-      return (
-        <div className="fixed inset-0 z-50 bg-slate-100 flex items-center justify-center">
-          <div className="bg-white rounded-2xl p-8 text-center max-w-md mx-4">
-            <AlertCircle className="w-12 h-12 text-amber-400 mx-auto mb-3" />
-            <h2 className="text-xl font-bold text-gray-900 mb-2">{t('noQuestions')}</h2>
-            <p className="text-gray-500 mb-4">{t('noQuestionsDesc')}</p>
-            <button onClick={reset} className="px-6 py-2.5 bg-[#2563eb] text-white rounded-xl font-medium">{t('backToMain')}</button>
-          </div>
-        </div>
-      );
-    }
-
-    const question = questions[currentQuestion];
-    if (!question) {
-      return (
-        <div className="fixed inset-0 z-50 bg-slate-100 flex items-center justify-center">
-          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-[#2563eb]" />
-        </div>
-      );
-    }
-    const answeredCount = questions.filter((_, i) => i in answers).length;
-    const isAnswered = currentQuestion in answers;
-
-    const sidebarItems = [
-      { icon: User,     label: profile?.first_name || 'Мирас', id: 'profile' },
-      { icon: Layers,   label: tTest('sections'), id: 'sections' },
-      { icon: Grid3x3,  label: tTest('answerCard'), id: 'answerCard' },
-      { icon: Calculator, label: tTest('calculator'), id: 'calc' },
-      { icon: Atom,     label: tTest('mendeleev'), id: 'mendeleev' },
-      { icon: Droplets, label: tTest('solubility'), id: 'solubility' },
-    ];
-
     return (
-      <div className="fixed inset-0 z-50 bg-slate-100 flex overflow-hidden overflow-x-hidden">
-        {/* ── Left sidebar ─────────────────────────────────────────────── */}
-        <aside className="w-16 lg:w-28 bg-[#DCEEFC] flex-shrink-0 flex flex-col items-center py-4 gap-4 overflow-y-auto border-r border-blue-200">
-          {sidebarItems.map(item => {
-            const Icon = item.icon;
-            const isProfile = item.id === 'profile';
-            return (
-              <button
-                key={item.id}
-                onClick={() => {
-                  if (item.id === 'answerCard') setShowAnswerCard(true);
-                }}
-                className={`flex flex-col items-center gap-1 w-full px-2 py-2 rounded-xl transition-colors ${
-                  isProfile ? 'cursor-default' : 'hover:bg-blue-200/50'
-                }`}
-                title={item.label}
-              >
-                <Icon className={`w-5 h-5 ${isProfile ? 'text-[#2563eb]' : 'text-[#2563eb]'}`} />
-                <span className="text-[10px] lg:text-[11px] text-gray-700 font-medium text-center leading-tight">
-                  {item.label}
-                </span>
-              </button>
-            );
-          })}
-        </aside>
-
-        {/* ── Main area ────────────────────────────────────────────────── */}
-        <div className="flex-1 flex flex-col min-w-0">
-          {/* Header */}
-          <header className="bg-gradient-to-r from-[#2563eb] to-[#1e3a8a] flex items-center px-3 sm:px-4 py-2.5 sm:py-3 flex-shrink-0 gap-2 sm:gap-3">
-            <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-              <button onClick={() => goBackToVariants()} className="text-white/80 hover:text-white" aria-label="Menu">
-                <Menu className="w-5 h-5" />
-              </button>
-              <span className="text-white font-semibold text-sm hidden sm:inline">
-                {[profile?.last_name, profile?.first_name].filter(Boolean).join(' ')}
-              </span>
-            </div>
-
-            <div className="flex-1 flex justify-center min-w-0">
-              <button
-                onClick={() => setShowFinishConfirm(true)}
-                className="px-3 sm:px-5 py-1.5 bg-white text-red-500 border-2 border-red-500 rounded-lg text-xs sm:text-sm font-bold hover:bg-red-500 hover:text-white transition-all whitespace-nowrap"
-              >
-                {t('finishTest')}
-              </button>
-            </div>
-
-            <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
-              <CircularTimer seconds={timeLeft} total={questions.length * 60} />
-              <button onClick={goBackToVariants} className="flex items-center gap-1 text-white/80 hover:text-white text-sm font-medium">
-                <ChevronLeft className="w-4 h-4" />
-                <span className="hidden sm:inline">{tTest('previousSubject')}</span>
-              </button>
-            </div>
-          </header>
-
-          {/* Offline warning bar */}
-          {offline && (
-            <div className="flex-shrink-0 bg-amber-50 border-b border-amber-200 text-amber-700 text-xs font-medium px-4 py-1.5 text-center">
-              {language === 'kz'
-                ? '⚠ Байланыс жоқ, жауаптар жергілікті сақталуда...'
-                : '⚠ Нет соединения, ответы сохраняются локально...'}
-            </div>
-          )}
-
-          {/* Question number nav */}
-          <div className="bg-white border-b border-gray-200 px-3 py-2 flex items-center gap-1.5 overflow-x-auto flex-shrink-0">
-            {questions.map((_, i) => {
-              const isAns = i in answers;
-              const isCur = i === currentQuestion;
-              return (
-                <button
-                  key={i}
-                  onClick={() => setCurrentQuestion(i)}
-                  className={`min-w-[32px] h-8 px-1.5 rounded-lg text-xs font-bold flex-shrink-0 transition-all border-2 ${
-                    isCur
-                      ? 'bg-[#DCEEFC] border-gray-800 text-gray-800'
-                      : isAns
-                        ? 'bg-[#DCEEFC] border-transparent text-[#2563eb]'
-                        : 'bg-gray-50 border-transparent text-gray-500 hover:bg-gray-100'
-                  }`}
-                >
-                  {i + 1}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Content */}
-          <div className="flex-1 overflow-y-auto">
-            <div className="max-w-3xl mx-auto px-3 sm:px-4 py-4 sm:py-6">
-              {/* Question card with slide transition */}
-              <AnimatePresence mode="wait">
-                <motion.div
-                  key={currentQuestion}
-                  initial={{ opacity: 0, x: 40 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -40 }}
-                  transition={{ duration: 0.28, ease: 'easeInOut' }}
-                  className="bg-white rounded-xl border border-gray-200 overflow-hidden"
-                >
-                  {/* Top row: question number + next button */}
-                  <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-100">
-                    <span className="text-sm font-bold text-gray-700">
-                      {t('question')} {currentQuestion + 1} {t('of')} {questions.length}
-                    </span>
-                    <button
-                      onClick={() => {
-                        if (currentQuestion < questions.length - 1) {
-                          setCurrentQuestion(p => p + 1);
-                        } else {
-                          setShowFinishConfirm(true);
-                        }
-                      }}
-                      disabled={!isAnswered && currentQuestion < questions.length - 1}
-                      className={`flex items-center gap-1.5 px-5 py-2 rounded-lg text-sm font-bold transition-colors ${
-                        isAnswered || currentQuestion === questions.length - 1
-                          ? 'bg-[#2563eb] text-white hover:bg-[#1e3a8a]'
-                          : 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                      }`}
-                    >
-                      {currentQuestion < questions.length - 1 ? (
-                        <>{tTest('nextQuestion')} <ArrowRight className="w-4 h-4" /></>
-                      ) : (
-                        tTest('finish')
-                      )}
-                    </button>
-                  </div>
-
-                  {/* Question text */}
-                  <div className="px-4 sm:px-6 py-5">
-                    <p className="text-lg font-medium text-gray-900 leading-relaxed">{question.question_text}</p>
-                  </div>
-
-                  {/* Answers as checkboxes */}
-                  <div className="border-t border-gray-100 divide-y divide-gray-100">
-                    {(['A', 'B', 'C', 'D'] as const).map(option => {
-                      const optionText = getOptionText(question, option);
-                      const isSelected = answers[currentQuestion] === option;
-                      return (
-                        <button
-                          key={option}
-                          onClick={() => selectAnswer(option)}
-className={`w-full flex items-center gap-4 px-4 sm:px-6 py-4 text-left transition-colors hover:bg-gray-50 ${
-                          isSelected ? 'bg-blue-50' : ''
-                        }`}
-                        >
-                          <div className={`w-5 h-5 flex-shrink-0 rounded border-2 flex items-center justify-center transition-colors ${
-                            isSelected
-                              ? 'border-[#2563eb] bg-[#2563eb]'
-                              : 'border-gray-300'
-                          }`}>
-                            {isSelected && <Check className="w-3.5 h-3.5 text-white checkbox-bounce" />}
-                          </div>
-                          <span className="text-sm font-medium text-gray-700 min-w-[16px] flex-shrink-0">{option})</span>
-                          <span className={`text-sm ${isSelected ? 'text-gray-900 font-semibold' : 'text-gray-700'}`}>{optionText}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </motion.div>
-              </AnimatePresence>
-            </div>
-          </div>
-        </div>
-
-        {/* ── Right-side tools ──────────────────────────────────────────── */}
-        <div className="hidden sm:flex flex-col items-center gap-3 w-10 lg:w-16 flex-shrink-0 bg-white border-l border-gray-200 py-4">
-          <LanguageSwitcher />
-          <button
-            onClick={() => {
-              if (confirm(tTest('resetAnswers'))) {
-                setAnswers({});
-              }
-            }}
-            className="flex flex-col items-center gap-1 text-gray-500 hover:text-gray-700 transition-colors"
-            title={tTest('reset')}
-          >
-            <RotateCcw className="w-5 h-5" />
-            <span className="hidden lg:inline text-[10px] font-medium">Reset</span>
-          </button>
-        </div>
-
-        {/* ── Answer Card Modal ─────────────────────────────────────────── */}
-        {showAnswerCard && (
-          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center" onClick={() => setShowAnswerCard(false)}>
-            <div className="bg-white rounded-2xl p-6 max-w-sm w-full mx-4 shadow-xl" onClick={e => e.stopPropagation()}>
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-bold text-gray-900">{tTest('answerCard')}</h3>
-                <button onClick={() => setShowAnswerCard(false)} className="p-1 text-gray-400 hover:text-gray-600">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {questions.map((_, i) => {
-                  const isAns = i in answers;
-                  const isCur = i === currentQuestion;
-                  return (
-                    <button
-                      key={i}
-                      onClick={() => { setCurrentQuestion(i); setShowAnswerCard(false); }}
-                      className={`w-10 h-10 rounded-lg text-sm font-bold transition-all ${
-                        isCur
-                          ? 'bg-gray-800 text-white'
-                          : isAns
-                            ? 'bg-[#2563eb] text-white'
-                            : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                      }`}
-                    >
-                      {i + 1}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ── Finish confirmation modal ─────────────────────────────────── */}
-        {showFinishConfirm && (
-          <div
-            className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4"
-            onClick={() => setShowFinishConfirm(false)}
-          >
-            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
-              <div className="w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center mb-4">
-                <AlertCircle className="w-6 h-6 text-red-500" />
-              </div>
-              <h3 className="text-lg font-bold text-gray-900 mb-2">
-                {t('finishTest')}
-              </h3>
-              <p className="text-gray-500 text-sm mb-6">
-                {tTest('finishConfirmAnswered', { answered: answeredCount, skipped: questions.length - answeredCount })}
-              </p>
-              <div className="flex gap-3">
-                <button
-                  onClick={() => setShowFinishConfirm(false)}
-                  className="flex-1 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-700 font-medium rounded-xl transition-all"
-                >
-                  {tTest('goBack')}
-                </button>
-                <button
-                  onClick={finishTest}
-                  className="flex-1 py-2.5 bg-red-500 hover:bg-red-600 text-white font-medium rounded-xl transition-all"
-                >
-                  {tTest('yesFinish')}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ── Time-up modal ─────────────────────────────────────────────── */}
-        {timeUp && (
-          <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4">
-            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 text-center">
-              <div className="w-14 h-14 rounded-2xl bg-amber-50 flex items-center justify-center mx-auto mb-4">
-                <Clock className="w-7 h-7 text-amber-500" />
-              </div>
-              <h3 className="text-lg font-bold text-gray-900 mb-2">
-                {tTest('timeUp')}
-              </h3>
-              <p className="text-gray-500 text-sm">
-                {tTest('timeUpSaved')}
-              </p>
-            </div>
-          </div>
-        )}
-      </div>
+      <ExamScreen
+        loading={loading}
+        studentName={[profile?.last_name, profile?.first_name].filter(Boolean).join(' ')}
+        subjectName={subjectLabel(selectedSubject?.name)}
+        variantName={selectedVariant.variant_name || `${selectedVariant.variant_number}-${tTest('variantFallback')}`}
+        questions={questions}
+        currentQuestion={currentQuestion}
+        onNavigate={setCurrentQuestion}
+        answers={answers}
+        onSelectAnswer={selectAnswer}
+        onResetAnswers={() => setAnswers({})}
+        timeLeft={timeLeft}
+        totalSeconds={questions.length * 60}
+        offline={offline}
+        onExit={goBackToVariants}
+        onBackHome={reset}
+        showFinishConfirm={showFinishConfirm}
+        onFinishConfirmChange={setShowFinishConfirm}
+        onFinish={finishTest}
+        submitError={submitError}
+        onDismissSubmitError={() => setSubmitError(null)}
+        timeUp={timeUp}
+      />
     );
   }
   if (stage === 'result' && selectedVariant) {
     const totalQuestions = questions.length || selectedVariant.total_score;
-    const answeredCount = questions.filter((_, i) => i in answers).length;
+    const totalPoints = resultTotal || questions.reduce((sum, q) => sum + maxScore(q), 0) || totalQuestions;
+    const answeredCount = questions.filter((_, i) => isAnswered(answers[i])).length;
     const fullName = [profile?.last_name, profile?.first_name].filter(Boolean).join(' ') || '—';
     const userCode = profile?.phone?.replace(/\D/g, '') || deriveCode(user?.id || '');
-    const sections = [{ name: selectedSubject?.name || '—', score }];
+    const sections = [{ name: subjectLabel(selectedSubject?.name), score }];
 
     let correct = 0;
     let wrong = 0;
     let skipped = 0;
+    // «верно» — вопрос решён на полный балл; частично верный ответ идёт в «неверно»
     questions.forEach((q, i) => {
-      if (!(i in answers)) skipped++;
-      else if (answers[i] === q.correct_answer) correct++;
+      if (!isAnswered(answers[i])) skipped++;
+      else if (scoreAnswer(q, answers[i]) === maxScore(q)) correct++;
       else wrong++;
     });
-    const totalPct = totalQuestions > 0 ? Math.round((score / totalQuestions) * 100) : 0;
+    const totalPct = totalPoints > 0 ? Math.round((score / totalPoints) * 100) : 0;
     const donutC = 2 * Math.PI * 42;
     const donutSeg = (n: number) => (totalQuestions > 0 ? (n / totalQuestions) * donutC : 0);
 
@@ -1230,6 +962,13 @@ className={`w-full flex items-center gap-4 px-4 sm:px-6 py-4 text-left transitio
             </div>
           </div>
 
+          {resultRanked === false && (
+            <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-xl px-4 py-3 mb-6">
+              <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />
+              <span>{tRes('notRanked')}</span>
+            </div>
+          )}
+
           {/* General result table (3 columns) */}
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden mb-6">
             <div className="md:grid md:grid-cols-[1fr_1fr_190px]">
@@ -1259,7 +998,7 @@ className={`w-full flex items-center gap-4 px-4 sm:px-6 py-4 text-left transitio
               <div className="flex flex-col items-center justify-center py-5 border-t md:border-t-0 border-gray-100 bg-blue-50/40">
                 <span className="text-sm font-bold text-gray-600 mb-1">{tRes('total') + ':'}</span>
                 <span className="text-5xl font-bold text-[#2563eb] leading-none"><CountUp value={score} /></span>
-                <span className="text-sm text-gray-400 mt-2">{tRes('questionsCount', { count: totalQuestions })}</span>
+                <span className="text-sm text-gray-400 mt-2">{tRes('outOfPoints', { count: totalPoints })} · {tRes('questionsCount', { count: totalQuestions })}</span>
               </div>
             </div>
           </div>
@@ -1319,7 +1058,7 @@ className={`w-full flex items-center gap-4 px-4 sm:px-6 py-4 text-left transitio
             <div className="grid grid-cols-3 divide-x divide-gray-100 border-b border-gray-100">
               <div className="px-5 py-4">
                 <p className="text-[11px] uppercase text-gray-400 mb-1">{tRes('section') + ':'}</p>
-                <p className="font-semibold text-gray-800">{selectedSubject?.name || '—'}</p>
+                <p className="font-semibold text-gray-800">{subjectLabel(selectedSubject?.name)}</p>
               </div>
               <div className="px-5 py-4">
                 <p className="text-[11px] uppercase text-gray-400 mb-1">{tRes('answersCount') + ':'}</p>
@@ -1350,8 +1089,8 @@ className={`w-full flex items-center gap-4 px-4 sm:px-6 py-4 text-left transitio
                         {tRes('yourAnswer')}
                       </td>
                       {questions.map((_, i) => (
-                        <td key={i} className={`border border-gray-200 px-2 py-2 text-center font-medium ${answers[i] ? 'text-gray-800' : 'text-gray-300'}`}>
-                          {answers[i] || '-'}
+                        <td key={i} className={`border border-gray-200 px-2 py-2 text-center font-medium whitespace-nowrap ${isAnswered(answers[i]) ? 'text-gray-800' : 'text-gray-300'}`}>
+                          {formatAnswer(answers[i]) || '-'}
                         </td>
                       ))}
                     </tr>
@@ -1360,10 +1099,10 @@ className={`w-full flex items-center gap-4 px-4 sm:px-6 py-4 text-left transitio
                         {tRes('testResult')}
                       </td>
                       {questions.map((_, i) => {
-                        const ok = answers[i] === questions[i].correct_answer;
+                        const got = scoreAnswer(questions[i], answers[i]);
                         return (
-                          <td key={i} className={`border border-gray-200 px-2 py-2 text-center font-bold ${ok ? 'text-green-600' : 'text-red-500'}`}>
-                            {ok ? 1 : 0}
+                          <td key={i} className={`border border-gray-200 px-2 py-2 text-center font-bold ${got === maxScore(questions[i]) ? 'text-green-600' : got > 0 ? 'text-amber-600' : 'text-red-500'}`}>
+                            {got}
                           </td>
                         );
                       })}
@@ -1393,8 +1132,7 @@ className={`w-full flex items-center gap-4 px-4 sm:px-6 py-4 text-left transitio
                     key={q.id}
                     question={q}
                     index={i}
-                    userAnswer={answers[i] || null}
-                    subjectName={selectedSubject?.name || ''}
+                    userAnswer={answers[i] ?? null}
                     language={language}
                     tRes={tRes}
                   />
@@ -1429,7 +1167,8 @@ className={`w-full flex items-center gap-4 px-4 sm:px-6 py-4 text-left transitio
                 <RotateCcw className="w-6 h-6 text-blue-500" />
               </div>
               <h3 className="text-lg font-bold text-gray-900 mb-2">{t('retakeConfirmTitle')}</h3>
-              <p className="text-gray-500 text-sm mb-6">{t('retakeConfirmDesc')}</p>
+              <p className="text-gray-500 text-sm mb-2">{t('retakeConfirmDesc')}</p>
+              <p className="text-amber-600 text-xs mb-6">{tRes('retakeNotRanked')}</p>
               <div className="flex gap-3">
                 <button onClick={() => setShowRetakeConfirm(false)}
                   className="flex-1 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-700 font-medium rounded-xl transition-all">

@@ -150,6 +150,7 @@ export async function saveDraftQuestions(importId: number, questions: ProcessedQ
     option_c_kz: q.options_kz.C || null,
     option_d_kz: q.options_kz.D || null,
     correct_answer: q.correct_answer,
+    topic: q.topic || null,
     confidence: q.confidence,
     needs_review: q.needs_review,
     is_duplicate: q.is_duplicate,

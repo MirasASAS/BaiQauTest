@@ -1,21 +1,21 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Plus, Pencil, Trash2, X, Check, AlertCircle, Loader2, ChevronDown, ChevronUp, FileQuestion, Calculator, Monitor, Globe, Atom, FlaskConical, Dna, MapPin, BookOpen, Sparkles, Users, BarChart3, Settings2, Database, Shield, Ban, Unlock, Trophy, TrendingUp, UploadCloud } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Check, AlertCircle, Loader2, ChevronDown, ChevronUp, FileQuestion, Calculator, Monitor, Globe, Atom, FlaskConical, Dna, MapPin, BookOpen, Sparkles, Users, BarChart3, Settings2, Database, Shield, Ban, Unlock, Trophy, TrendingUp, UploadCloud, Tags } from 'lucide-react';
 import { useLanguage } from '@baiqautest/shared';
 import { getSubjects, getVariants, getQuestionsByVariantPaginated, createVariant, updateVariant, deleteVariant, createQuestion, updateQuestion, deleteQuestion } from '@baiqautest/shared';
-import { generateTestQuestions, isAIConfigured } from '@baiqautest/shared';
+import { generateTestQuestions, suggestQuestionTopics, questionType, questionKey, formatAnswer } from '@baiqautest/shared';
+import { useTranslation } from 'react-i18next';
 import { adminListUsers, adminSetUserRole, adminToggleBlock, adminPlatformStats, type AdminUser, type PlatformStats } from '@baiqautest/shared';
 import { ImportAdmin } from './admin/ImportAdmin';
+import { QuestionForm } from './admin/QuestionForm';
 import type { GeneratedQuestion } from '@baiqautest/shared';
 import type { Subject, Variant, Question } from '@baiqautest/shared';
 
-type QuestionFormData = {
-  question_text: string;
-  option_a: string;
-  option_b: string;
-  option_c: string;
-  option_d: string;
-  correct_answer: 'A' | 'B' | 'C' | 'D';
-};
+// Структура раздела ЕНТ по предмету: число заданий и сумма баллов (как ent_section_spec в SQL 14)
+function entSpec(subjectName: string): { questions: number; points: number } {
+  if (subjectName === 'kazakhstan_history') return { questions: 20, points: 20 };
+  if (subjectName === 'math_literacy' || subjectName === 'reading_literacy') return { questions: 10, points: 10 };
+  return { questions: 40, points: 50 };
+}
 
 type VariantFormData = {
   subject_id: number;
@@ -44,15 +44,6 @@ export function AdminPage() {
   const [showQuestionForm, setShowQuestionForm] = useState(false);
   const [selectedVariantForQuestion, setSelectedVariantForQuestion] = useState<Variant | null>(null);
   const [editingQuestion, setEditingQuestion] = useState<Question | null>(null);
-  const [questionFormData, setQuestionFormData] = useState<QuestionFormData>({
-    question_text: '',
-    option_a: '',
-    option_b: '',
-    option_c: '',
-    option_d: '',
-    correct_answer: 'A',
-  });
-
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedSubjects, setExpandedSubjects] = useState<Set<number>>(new Set());
@@ -124,6 +115,56 @@ export function AdminPage() {
   const [aiSavingAll, setAiSavingAll] = useState(false);
   const [aiSuccess, setAiSuccess] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+
+  // Расстановка тем ИИ по вопросам предмета, у которых тема не задана
+  const { t: tAdmin } = useTranslation('admin');
+  const [topicJob, setTopicJob] = useState<{ subjectId: number; done: number; total: number } | null>(null);
+  const [topicNotice, setTopicNotice] = useState<{ subjectId: number; text: string; isError: boolean } | null>(null);
+
+  async function handleFillTopics(subject: Subject) {
+    if (topicJob) return;
+    setTopicNotice(null);
+    setTopicJob({ subjectId: subject.id, done: 0, total: 0 });
+    try {
+      // все вопросы предмета, а не только уже раскрытые в списке
+      const all: Question[] = [];
+      for (const variant of variants.filter(v => v.subject_id === subject.id)) {
+        for (let page = 1; ; page++) {
+          const { questions: chunk, count } = await getQuestionsByVariantPaginated(variant.id, page, 200);
+          all.push(...chunk);
+          if (chunk.length === 0 || page * 200 >= count) break;
+        }
+      }
+      const known = new Set(all.map(q => q.topic?.trim()).filter((v): v is string => !!v));
+      const missing = all.filter(q => !q.topic?.trim());
+      if (missing.length === 0) {
+        setTopicNotice({ subjectId: subject.id, text: tAdmin('topicsNothing'), isError: false });
+        setTopicJob(null);
+        return;
+      }
+
+      let filled = 0;
+      setTopicJob({ subjectId: subject.id, done: 0, total: missing.length });
+      for (let i = 0; i < missing.length; i += 25) {
+        const batch = missing.slice(i, i + 25);
+        const topics = await suggestQuestionTopics(subject.name, batch, [...known]);
+        for (const q of batch) {
+          const topic = topics[q.id];
+          if (!topic) continue;
+          await updateQuestion(q.id, { topic });
+          known.add(topic);
+          filled++;
+        }
+        setTopicJob({ subjectId: subject.id, done: Math.min(i + 25, missing.length), total: missing.length });
+      }
+      setTopicNotice({ subjectId: subject.id, text: tAdmin('topicsDone', { filled, total: missing.length }), isError: false });
+      await Promise.all(variants.filter(v => v.subject_id === subject.id && questionsByVariant[v.id]).map(v => reloadVariantQuestions(v.id)));
+    } catch (err) {
+      console.error('Topic fill error:', err);
+      setTopicNotice({ subjectId: subject.id, text: `${tAdmin('topicsError')} (${err instanceof Error ? err.message : String(err)})`, isError: true });
+    }
+    setTopicJob(null);
+  }
 
   const subjectIcons: Record<string, typeof Calculator> = {
     math: Calculator,
@@ -277,73 +318,13 @@ export function AdminPage() {
   function startCreateQuestion(variant: Variant) {
     setSelectedVariantForQuestion(variant);
     setEditingQuestion(null);
-    setQuestionFormData({
-      question_text: '',
-      option_a: '',
-      option_b: '',
-      option_c: '',
-      option_d: '',
-      correct_answer: 'A',
-    });
-    setError(null);
     setShowQuestionForm(true);
   }
 
   function startEditQuestion(question: Question, variant: Variant) {
     setSelectedVariantForQuestion(variant);
     setEditingQuestion(question);
-    setQuestionFormData({
-      question_text: question.question_text,
-      option_a: question.option_a,
-      option_b: question.option_b,
-      option_c: question.option_c,
-      option_d: question.option_d,
-      correct_answer: question.correct_answer,
-    });
-    setError(null);
     setShowQuestionForm(true);
-  }
-
-  async function handleSaveQuestion() {
-    if (!questionFormData.question_text || !questionFormData.option_a || !questionFormData.option_b || !questionFormData.option_c || !questionFormData.option_d) {
-      setError(t('fillAllFields'));
-      return;
-    }
-
-    setSaving(true);
-    setError(null);
-
-    try {
-      const variantQuestions = questionsByVariant[selectedVariantForQuestion!.id] || [];
-      const orderNum = variantQuestions.length + 1;
-
-      if (editingQuestion) {
-        await updateQuestion(editingQuestion.id, {
-          question_text: questionFormData.question_text,
-          option_a: questionFormData.option_a,
-          option_b: questionFormData.option_b,
-          option_c: questionFormData.option_c,
-          option_d: questionFormData.option_d,
-          correct_answer: questionFormData.correct_answer,
-        });
-      } else {
-        await createQuestion({
-          variant_id: selectedVariantForQuestion!.id,
-          question_text: questionFormData.question_text,
-          option_a: questionFormData.option_a,
-          option_b: questionFormData.option_b,
-          option_c: questionFormData.option_c,
-          option_d: questionFormData.option_d,
-          correct_answer: questionFormData.correct_answer,
-          order_num: orderNum,
-        });
-      }
-      await reloadVariantQuestions(selectedVariantForQuestion!.id);
-      setShowQuestionForm(false);
-    } catch (err) {
-      setError(t('saveError'));
-    }
-    setSaving(false);
   }
 
   async function handleDeleteQuestion(question: Question) {
@@ -418,6 +399,7 @@ export function AdminPage() {
           option_d: q.option_d,
           correct_answer: q.correct_answer,
           order_num: i + 1,
+          ...(q.topic ? { topic: q.topic } : {}),
         });
       }
 
@@ -520,18 +502,34 @@ export function AdminPage() {
                     >
                       <Plus className="w-5 h-5" />
                     </button>
-                    {isAIConfigured() && (
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          openAIGenerate(subject);
-                        }}
-                        className="p-2 text-violet-600 hover:bg-violet-50 rounded-xl transition-colors"
-                        title={t('aiGenerate')}
-                      >
-                        <Sparkles className="w-5 h-5" />
-                      </button>
-                    )}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        openAIGenerate(subject);
+                      }}
+                      className="p-2 text-violet-600 hover:bg-violet-50 rounded-xl transition-colors"
+                      title={t('aiGenerate')}
+                    >
+                      <Sparkles className="w-5 h-5" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleFillTopics(subject);
+                      }}
+                      disabled={topicJob !== null}
+                      className="flex items-center gap-1.5 p-2 text-amber-600 hover:bg-amber-50 rounded-xl transition-colors disabled:opacity-50"
+                      title={tAdmin('topicsFill')}
+                    >
+                      {topicJob?.subjectId === subject.id ? (
+                        <>
+                          <Loader2 className="w-5 h-5 animate-spin" />
+                          {topicJob.total > 0 && <span className="text-xs font-medium tabular-nums">{topicJob.done}/{topicJob.total}</span>}
+                        </>
+                      ) : (
+                        <Tags className="w-5 h-5" />
+                      )}
+                    </button>
                     {expandedSubjects.has(subject.id) ? (
                       <ChevronUp className="w-5 h-5 text-gray-400" />
                     ) : (
@@ -539,6 +537,12 @@ export function AdminPage() {
                     )}
                   </div>
                 </button>
+
+                {topicNotice?.subjectId === subject.id && (
+                  <div className={`px-5 py-2.5 text-sm border-t ${topicNotice.isError ? 'bg-red-50 border-red-100 text-red-600' : 'bg-amber-50 border-amber-100 text-amber-800'}`}>
+                    {topicNotice.text}
+                  </div>
+                )}
 
                 {expandedSubjects.has(subject.id) && (
                   <div className="border-t border-gray-100 divide-y divide-gray-100">
@@ -551,6 +555,8 @@ export function AdminPage() {
                         const variantQuestions = questionsByVariant[variant.id] || [];
                         const loadedTotal = questionsTotal[variant.id] ?? variantQuestions.length;
                         const hasMore = variantQuestions.length < loadedTotal;
+                        const spec = entSpec(subject.name);
+                        const isEntFormat = loadedTotal === spec.questions && variant.total_score === spec.points;
 
                         return (
                           <div key={variant.id} className="p-5">
@@ -560,6 +566,14 @@ export function AdminPage() {
                                 <div className="flex items-center gap-4 text-sm text-gray-500 mt-1">
                                   <span>{loadedTotal} {language === 'kz' ? 'сұрақ' : 'вопросов'}</span>
                                   <span>{variant.total_score} {language === 'kz' ? 'балл' : 'баллов'}</span>
+                                  {questionsTotal[variant.id] !== undefined && (
+                                    <span
+                                      className={`px-2 py-0.5 rounded-lg text-xs font-medium ${isEntFormat ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'}`}
+                                      title={tAdmin('entFormatHint', { questions: spec.questions, points: spec.points })}
+                                    >
+                                      {isEntFormat ? tAdmin('entFormat') : tAdmin('entFormatNo', { questions: spec.questions, points: spec.points })}
+                                    </span>
+                                  )}
                                 </div>
                               </div>
                               <div className="flex items-center gap-1">
@@ -593,9 +607,17 @@ export function AdminPage() {
                                       <div className="flex items-center gap-2 text-sm">
                                         <span className="text-gray-400 font-medium w-6">{idx + 1}.</span>
                                         <span className="text-gray-700 truncate max-w-md">{q.question_text}</span>
-                                        <span className={`text-xs px-2 py-0.5 rounded-lg ${q.correct_answer === 'A' ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'}`}>
-                                          {q.correct_answer}
+                                        <span className={`text-xs px-2 py-0.5 rounded-lg whitespace-nowrap ${q.correct_answer === 'A' ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-600'}`}>
+                                          {formatAnswer(questionKey(q))}
                                         </span>
+                                        {questionType(q) !== 'single' && (
+                                          <span className="text-xs px-2 py-0.5 rounded-lg bg-blue-50 text-[#2563eb] whitespace-nowrap">
+                                            {tAdmin(questionType(q) === 'multiple' ? 'typeMultiple' : 'typeMatching')}
+                                          </span>
+                                        )}
+                                        {!q.topic && (
+                                          <span className="text-xs px-2 py-0.5 rounded-lg bg-amber-50 text-amber-700 whitespace-nowrap">{tAdmin('noTopic')}</span>
+                                        )}
                                       </div>
                                     </div>
                                     <div className="flex items-center gap-1">
@@ -709,131 +731,20 @@ export function AdminPage() {
 
       {/* Question Form Modal */}
       {showQuestionForm && selectedVariantForQuestion && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
-              <div>
-                <h2 className="text-lg font-bold text-gray-900">
-                  {editingQuestion ? t('editQuestion') : t('newQuestion')}
-                </h2>
-                <p className="text-sm text-gray-500">{selectedVariantForQuestion.variant_name}</p>
-              </div>
-              <button
-                onClick={() => setShowQuestionForm(false)}
-                className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-6 space-y-5">
-              {error && (
-                <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 text-red-600 text-sm rounded-xl">
-                  <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                  {error}
-                </div>
-              )}
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">{t('questionText')}</label>
-                <textarea
-                  value={questionFormData.question_text}
-                  onChange={e => setQuestionFormData({ ...questionFormData, question_text: e.target.value })}
-                  rows={3}
-                  className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#2563eb]/20 focus:border-[#2563eb] resize-none bg-gray-50"
-                  placeholder={t('questionText')}
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('optionA')}</label>
-                  <input
-                    type="text"
-                    value={questionFormData.option_a}
-                    onChange={e => setQuestionFormData({ ...questionFormData, option_a: e.target.value })}
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#2563eb]/20 focus:border-[#2563eb] bg-gray-50"
-                    placeholder={t('optionA')}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('optionB')}</label>
-                  <input
-                    type="text"
-                    value={questionFormData.option_b}
-                    onChange={e => setQuestionFormData({ ...questionFormData, option_b: e.target.value })}
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#2563eb]/20 focus:border-[#2563eb] bg-gray-50"
-                    placeholder={t('optionB')}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('optionC')}</label>
-                  <input
-                    type="text"
-                    value={questionFormData.option_c}
-                    onChange={e => setQuestionFormData({ ...questionFormData, option_c: e.target.value })}
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#2563eb]/20 focus:border-[#2563eb] bg-gray-50"
-                    placeholder={t('optionC')}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('optionD')}</label>
-                  <input
-                    type="text"
-                    value={questionFormData.option_d}
-                    onChange={e => setQuestionFormData({ ...questionFormData, option_d: e.target.value })}
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#2563eb]/20 focus:border-[#2563eb] bg-gray-50"
-                    placeholder={t('optionD')}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">{t('correctAnswer')}</label>
-                <div className="flex gap-2">
-                  {(['A', 'B', 'C', 'D'] as const).map(option => (
-                    <button
-                      key={option}
-                      type="button"
-                      onClick={() => setQuestionFormData({ ...questionFormData, correct_answer: option })}
-                      className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 font-medium transition-all ${
-                        questionFormData.correct_answer === option
-                          ? 'border-green-500 bg-green-50 text-green-700'
-                          : 'border-gray-200 hover:border-gray-300 text-gray-600'
-                      }`}
-                    >
-                      {questionFormData.correct_answer === option && <Check className="w-4 h-4" />}
-                      {option}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="flex gap-3 pt-2">
-                <button
-                  onClick={() => setShowQuestionForm(false)}
-                  className="flex-1 py-2.5 border border-gray-200 hover:bg-gray-50 text-gray-700 font-medium rounded-xl transition-colors"
-                >
-                  {t('cancel')}
-                </button>
-                <button
-                  onClick={handleSaveQuestion}
-                  disabled={saving}
-                  className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-[#2563eb] hover:bg-[#1e3a8a] text-white font-medium rounded-xl transition-colors disabled:opacity-50"
-                >
-                  {saving ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      {t('saving')}
-                    </>
-                  ) : (
-                    t('save')
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <QuestionForm
+          key={editingQuestion?.id ?? 'new'}
+          variant={selectedVariantForQuestion}
+          question={editingQuestion}
+          nextOrderNum={(questionsByVariant[selectedVariantForQuestion.id] || []).length + 1}
+          topicSuggestions={[...new Set(
+            Object.values(questionsByVariant).flat().map(q => q.topic).filter((v): v is string => !!v)
+          )].sort()}
+          onClose={() => setShowQuestionForm(false)}
+          onSaved={async () => {
+            setShowQuestionForm(false);
+            await reloadVariantQuestions(selectedVariantForQuestion.id);
+          }}
+        />
       )}
 
       {/* AI Generate Modal */}

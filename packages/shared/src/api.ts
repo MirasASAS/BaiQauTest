@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import type { AnswerValue, Question } from './types';
 
 function toError(err: { message?: string; code?: string; details?: string } | null): Error {
   if (err?.message) return new Error(err.message);
@@ -58,10 +59,14 @@ export interface LeaderboardEntry {
   tests_count: number;
   avg_percent: number;
   best_percent: number;
+  total_points: number;
 }
 
-export async function getLeaderboard(): Promise<LeaderboardEntry[]> {
-  const { data, error } = await supabase.rpc('get_leaderboard');
+export type LeaderboardPeriod = 'all' | 'week';
+
+// Рейтинг считается по сумме баллов зачётных (первых, сданных вовремя) попыток
+export async function getLeaderboard(period: LeaderboardPeriod = 'all'): Promise<LeaderboardEntry[]> {
+  const { data, error } = await supabase.rpc('get_leaderboard', { p_period: period });
   if (error) throw toError(error);
   return data || [];
 }
@@ -72,12 +77,63 @@ export interface MyRank {
   nickname: string;
   avg_percent: number;
   tests_count: number;
+  total_points: number;
 }
 
-export async function getMyRank(): Promise<MyRank | null> {
-  const { data, error } = await supabase.rpc('get_my_rank');
+export async function getMyRank(period: LeaderboardPeriod = 'all'): Promise<MyRank | null> {
+  const { data, error } = await supabase.rpc('get_my_rank', { p_period: period });
   if (error) throw toError(error);
   return data?.[0] || null;
+}
+
+// ── Topic stats ──────────────────────────────────────────────────────
+
+export interface TopicStat {
+  subject: string;
+  // null — вопросы без темы
+  topic: string | null;
+  total: number;
+  correct: number;
+}
+
+// Статистика ученика по предметам и темам (по первой попытке каждого варианта)
+export async function getMyTopicStats(): Promise<TopicStat[]> {
+  const { data, error } = await supabase.rpc('get_my_topic_stats');
+  if (error) throw toError(error);
+  return data || [];
+}
+
+// ── Mistakes practice («работа над ошибками», SQL 11) ────────────────
+
+// Вопрос, на который ученик ошибся в первой попытке варианта и ещё не исправил в тренировке
+export type MistakeQuestion = Question & {
+  subject: string;
+  // null — в попытке вопрос был пропущен
+  my_answer: AnswerValue | null;
+};
+
+export interface MistakesSummary {
+  // total и by_subject считаются по всем предметам, questions — с учётом фильтра
+  total: number;
+  by_subject: { subject_id: number; subject: string; count: number }[];
+  questions: MistakeQuestion[];
+}
+
+export async function getMyMistakes(subjectId: number | null = null, limit = 20): Promise<MistakesSummary> {
+  const { data, error } = await supabase.rpc('get_my_mistakes', { p_subject_id: subjectId, p_limit: limit });
+  if (error) throw toError(error);
+  return {
+    total: data?.total ?? 0,
+    by_subject: data?.by_subject || [],
+    questions: data?.questions || [],
+  };
+}
+
+// Ответ в тренировке проверяет сервер; ответ на полный балл убирает вопрос из списка ошибок
+export async function recordMistakePractice(questionId: number, answer: AnswerValue): Promise<{ is_correct: boolean; score: number; correct_answer: AnswerValue }> {
+  const { data, error } = await supabase.rpc('record_mistake_practice', { p_question_id: questionId, p_answer: answer });
+  if (error) throw toError(error);
+  return data;
 }
 
 // ── Gamification ─────────────────────────────────────────────────────
@@ -114,5 +170,15 @@ export const BADGE_META: Record<string, { label: { kz: string; ru: string }; ico
     label: { kz: '90%+ балл алушы', ru: 'Набравший 90%+' },
     icon: '🏆',
     color: 'bg-violet-50 text-violet-600 border-violet-100',
+  },
+  week_champion: {
+    label: { kz: 'Апта жеңімпазы', ru: 'Победитель недели' },
+    icon: '👑',
+    color: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+  },
+  week_top3: {
+    label: { kz: 'Апта жүлдегері', ru: 'Призёр недели' },
+    icon: '🎖️',
+    color: 'bg-orange-50 text-orange-600 border-orange-100',
   },
 };

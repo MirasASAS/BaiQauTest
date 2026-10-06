@@ -1,7 +1,7 @@
 import type { ParsedQuestion, ProcessedQuestion, AIResponseEnvelope, AIQuestionResult, AIOptions } from './types';
 import { buildClaudeUserPrompt, CLAUDE_JSON_SCHEMA, CLAUDE_SYSTEM_PROMPT } from './prompts';
 import { callGemini } from '@baiqautest/shared';
-import { DeepSeekAIProvider, isDeepSeekConfigured } from './deepseekProvider';
+import { DeepSeekAIProvider } from './deepseekProvider';
 
 export interface AIProvider {
   name: string;
@@ -41,7 +41,7 @@ export class MockAIProvider implements AIProvider {
 }
 
 // ── Gemini AI Provider ────────────────────────────────────────────────
-// Использует существующий в проекте ключ VITE_GEMINI_API_KEY.
+// Ключ Gemini лежит на сервере (Edge Function ai-import).
 // Извлекает/нормализует вопросы и переводит RU ↔ KZ, сохраняя формулы.
 const GEMINI_SYSTEM_PROMPT = `You are a test-question extraction and translation engine for ЕНТ/ҰБТ.
 
@@ -53,11 +53,13 @@ Extract from each item:
 Translate Russian <-> Kazakh when requested.
 Preserve: mathematical formulas (x²+2x+1), chemical formulas (H₂O, CO₂, NaCl), numbers, units, symbols, abbreviations.
 
+For every question also set "topic": the curriculum topic it belongs to, 2-4 words in Russian (e.g. "Квадратные уравнения", "Законы Ньютона"). Use the same wording for questions of the same topic.
+
 Never invent missing information. If the correct answer cannot be determined from the source, set "correct_answer": null and "needs_review": true.
 If target language is "none", put the source text into both question_ru/question_kz and options_ru/options_kz.
 
 Return ONLY valid JSON (no markdown, no commentary) matching this schema:
-{"questions":[{"question_ru":"","question_kz":"","options_ru":{"A":"","B":"","C":"","D":""},"options_kz":{"A":"","B":"","C":"","D":""},"correct_answer":"A","confidence":0.0,"needs_review":false,"source_index":1}]}`;
+{"questions":[{"question_ru":"","question_kz":"","options_ru":{"A":"","B":"","C":"","D":""},"options_kz":{"A":"","B":"","C":"","D":""},"correct_answer":"A","topic":"","confidence":0.0,"needs_review":false,"source_index":1}]}`;
 
 function extractJson(text: string): string {
   let s = text.trim();
@@ -87,7 +89,7 @@ export class GeminiAIProvider implements AIProvider {
       })),
     });
 
-    // callGemini: Edge Function ai-import (сервердегі ключ) → тікелей Gemini (fallback)
+    // callGemini: Edge Function ai-import (ключ на сервере)
     const text = await callGemini(GEMINI_SYSTEM_PROMPT, userPrompt, 0.2);
 
     const parsed = JSON.parse(extractJson(text)) as AIResponseEnvelope;
@@ -118,6 +120,7 @@ export class GeminiAIProvider implements AIProvider {
         confidence: typeof q.confidence === 'number' ? q.confidence : (correct ? 1 : 0.3),
         needs_review: !!q.needs_review || !correct || !hasAllOpts(opt(q.options_ru)) || !hasAllOpts(opt(q.options_kz)),
         is_duplicate: false,
+        topic: typeof q.topic === 'string' && q.topic.trim() ? q.topic.trim().slice(0, 80) : null,
         source_index: q.source_index ?? src?.source_index ?? 0,
       };
     });
@@ -181,37 +184,17 @@ export class FallbackProvider implements AIProvider {
 }
 
 // ── Factory ────────────────────────────────────────────────────────────
-// Приоритет провайдеров: DeepSeek (если задан ключ) > Gemini > Mock.
+// Приоритет провайдеров: DeepSeek > Gemini > Mock (все реальные — через Edge Function ai-import).
 // Любой сбой → FallbackProvider переключается на следующий, импорт не теряет вопросы.
 export function getAIProvider(): AIProvider {
-  const hasGemini = !!import.meta.env.VITE_GEMINI_API_KEY;
   const mode = import.meta.env.VITE_AI_PROVIDER || 'auto';
+  const gemini = () => new FallbackProvider(new GeminiAIProvider(), new MockAIProvider());
 
   // Явный выбор через VITE_AI_PROVIDER
-  if (mode === 'claude') {
-    try {
-      return new FallbackProvider(new ClaudeAIProvider(), new MockAIProvider());
-    } catch {
-      return new MockAIProvider();
-    }
-  }
-  if (mode === 'gemini') {
-    return hasGemini
-      ? new FallbackProvider(new GeminiAIProvider(), new MockAIProvider())
-      : new MockAIProvider();
-  }
-  if (mode === 'mock') {
-    return new MockAIProvider();
-  }
+  if (mode === 'claude') return new FallbackProvider(new ClaudeAIProvider(), new MockAIProvider());
+  if (mode === 'gemini') return gemini();
+  if (mode === 'mock') return new MockAIProvider();
 
   // Автоматический выбор
-  if (isDeepSeekConfigured()) {
-    return new FallbackProvider(new DeepSeekAIProvider(), hasGemini
-      ? new FallbackProvider(new GeminiAIProvider(), new MockAIProvider())
-      : new MockAIProvider());
-  }
-  if (hasGemini) {
-    return new FallbackProvider(new GeminiAIProvider(), new MockAIProvider());
-  }
-  return new MockAIProvider();
+  return new FallbackProvider(new DeepSeekAIProvider(), gemini());
 }

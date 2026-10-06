@@ -3,6 +3,7 @@ import { User, Mail, Phone, Save, Loader2, Award } from 'lucide-react';
 import { useAuth } from '@baiqautest/shared';
 import { useLanguage } from '@baiqautest/shared';
 import { getUserBadges, BADGE_META } from '@baiqautest/shared';
+import { AppSettingsCard } from './AppSettingsCard';
 
 export function ProfilePage() {
   const { profile, user, updateProfile } = useAuth();
@@ -151,7 +152,7 @@ export function ProfilePage() {
               {t('email')}
             </label>
             <div className="w-full px-4 py-3 border border-gray-100 bg-gray-50 text-gray-600 rounded-xl flex items-center">
-              {user?.email || 'email@example.com'}
+              {user?.email || '—'}
             </div>
           </div>
 
@@ -257,6 +258,8 @@ export function ProfilePage() {
           </div>
         )}
       </div>
+
+      <AppSettingsCard />
     </div>
   );
 }
