@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertCircle, ArrowRight, Check, CheckCircle, Loader2, Sparkles, X } from 'lucide-react';
-import { useLanguage, useSubjectLabel, getMyMistakes, recordMistakePractice, explainQuestion, localizeQuestion, MathText } from '@baiqautest/shared';
-import type { MistakeQuestion } from '@baiqautest/shared';
-
-const OPTIONS = ['A', 'B', 'C', 'D'] as const;
-const FLAT = 'hover:!transform-none active:!transform-none';
+import { AlertCircle, ArrowRight, CheckCircle, Loader2, Sparkles, X } from 'lucide-react';
+import { useLanguage, useSubjectLabel, getMyMistakes, recordMistakePractice, explainQuestion, localizeQuestion, MathText, questionType, questionKey, scoreAnswer, maxScore, isAnswered, formatAnswer } from '@baiqautest/shared';
+import type { AnswerValue, MistakeQuestion } from '@baiqautest/shared';
+import { QuestionAnswer, PassageBlock } from './QuestionAnswer';
 
 // «Работа над ошибками»: вопросы, на которые ученик ошибся в первой попытке.
 // Ответ проверяется сразу; верно отвеченный вопрос уходит из списка ошибок.
@@ -16,7 +14,9 @@ export function MistakesPractice({ subjectId, onClose }: { subjectId: number | n
   const [questions, setQuestions] = useState<MistakeQuestion[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [index, setIndex] = useState(0);
-  const [picked, setPicked] = useState<string | null>(null);
+  // picked — ответ, который ученик набирает; checked — он отправлен и показан ключ
+  const [picked, setPicked] = useState<AnswerValue | null>(null);
+  const [checked, setChecked] = useState(false);
   const [checking, setChecking] = useState(false);
   const [fixed, setFixed] = useState(0);
   const [explainText, setExplainText] = useState('');
@@ -30,12 +30,13 @@ export function MistakesPractice({ subjectId, onClose }: { subjectId: number | n
     return () => { active = false; };
   }, [subjectId]);
 
-  async function choose(option: string, question: MistakeQuestion) {
-    if (picked || checking) return;
+  async function check(answer: AnswerValue, question: MistakeQuestion) {
+    if (checked || checking) return;
     setChecking(true);
-    setPicked(option);
+    setPicked(answer);
+    setChecked(true);
     try {
-      const result = await recordMistakePractice(question.id, option);
+      const result = await recordMistakePractice(question.id, answer);
       if (result.is_correct) setFixed(n => n + 1);
     } catch (err) {
       // Не записалось — ответ всё равно показываем, вопрос просто останется в списке ошибок
@@ -46,6 +47,7 @@ export function MistakesPractice({ subjectId, onClose }: { subjectId: number | n
 
   function next() {
     setPicked(null);
+    setChecked(false);
     setExplainText('');
     setIndex(i => i + 1);
   }
@@ -94,9 +96,9 @@ export function MistakesPractice({ subjectId, onClose }: { subjectId: number | n
 
   const source = questions[index];
   const question = localizeQuestion(source, language);
-  const optionText: Record<(typeof OPTIONS)[number], string> = {
-    A: question.option_a, B: question.option_b, C: question.option_c, D: question.option_d,
-  };
+  const isSingle = questionType(source) === 'single';
+  const key = questionKey(source);
+  const isRight = checked && scoreAnswer(source, picked) === maxScore(source);
   const savedExplanation = (language === 'kz' ? source.explanation_kz : source.explanation_ru) || '';
   const shownExplanation = explainText || savedExplanation;
 
@@ -107,46 +109,42 @@ export function MistakesPractice({ subjectId, onClose }: { subjectId: number | n
           <span className="px-3.5 py-1.5 rounded-full bg-blue-50 text-[#2563eb] text-sm font-bold">{subjectLabel(source.subject)}</span>
           {source.topic && <span className="px-3.5 py-1.5 rounded-full bg-slate-100 text-slate-600 text-sm font-medium">{source.topic}</span>}
         </div>
+        {source.passage && <PassageBlock passage={source.passage} language={language} />}
         <p className="text-xl sm:text-2xl font-semibold text-gray-900 leading-relaxed whitespace-pre-line"><MathText text={question.question_text} /></p>
         {question.image_url && (
           <img src={question.image_url} alt="" className="mt-5 max-h-80 max-w-full rounded-2xl border border-gray-200" />
         )}
       </div>
 
-      <div className="px-4 sm:px-8 pb-6 space-y-3">
-        {OPTIONS.map(option => {
-          const isRight = picked !== null && option === source.correct_answer;
-          const isWrongPick = picked === option && option !== source.correct_answer;
-          return (
+      <div className="px-4 sm:px-8 pb-6">
+        <QuestionAnswer
+          question={source}
+          language={language}
+          value={picked}
+          // вопрос с одним ответом проверяется сразу, остальные — по кнопке «Проверить»
+          onChange={value => {
+            if (isSingle && value !== null) check(value, source);
+            else setPicked(value);
+          }}
+          reveal={checked ? key : null}
+        />
+        {!isSingle && !checked && (
+          <div className="flex justify-end mt-5">
             <button
-              key={option}
-              onClick={() => choose(option, source)}
-              disabled={picked !== null}
-              className={`w-full flex items-center gap-4 px-4 sm:px-5 py-4 rounded-2xl border-2 text-left ${FLAT} ${
-                isRight
-                  ? 'border-green-500 bg-green-50'
-                  : isWrongPick
-                  ? 'border-red-400 bg-red-50'
-                  : picked !== null
-                  ? 'border-gray-200 bg-white opacity-60'
-                  : 'border-gray-200 bg-white hover:border-blue-200 hover:bg-slate-50'
-              }`}
+              onClick={() => { if (isAnswered(picked)) check(picked, source); }}
+              disabled={!isAnswered(picked)}
+              className="px-8 py-3.5 bg-[#2563eb] hover:bg-[#1e3a8a] text-white font-bold rounded-xl shadow-md shadow-blue-200 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <span className={`flex-shrink-0 w-11 h-11 rounded-xl flex items-center justify-center text-lg font-bold ${
-                isRight ? 'bg-green-500 text-white' : isWrongPick ? 'bg-red-500 text-white' : 'bg-slate-100 text-slate-600'
-              }`}>
-                {isRight ? <Check className="w-5 h-5" /> : isWrongPick ? <X className="w-5 h-5" /> : option}
-              </span>
-              <span className="flex-1 min-w-0 text-base sm:text-lg leading-snug text-gray-800"><MathText text={optionText[option]} /></span>
+              {tTest('checkAnswer')}
             </button>
-          );
-        })}
+          </div>
+        )}
       </div>
 
-      {picked !== null && (
+      {checked && (
         <div className="px-5 sm:px-10 pb-7 space-y-4">
-          <p className={`text-base font-bold ${picked === source.correct_answer ? 'text-green-600' : 'text-red-500'}`}>
-            {tTest(picked === source.correct_answer ? 'mistakeCorrect' : 'mistakeWrong', { answer: source.correct_answer })}
+          <p className={`text-base font-bold ${isRight ? 'text-green-600' : 'text-red-500'}`}>
+            {tTest(isRight ? 'mistakeCorrect' : 'mistakeWrong', { answer: formatAnswer(key) })}
           </p>
           {shownExplanation ? (
             <div className="p-4 bg-blue-50 rounded-2xl text-sm text-gray-700 leading-relaxed whitespace-pre-line"><MathText text={shownExplanation} /></div>

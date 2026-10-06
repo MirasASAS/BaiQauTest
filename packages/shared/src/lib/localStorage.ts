@@ -1,5 +1,5 @@
 import { supabase } from '../supabase';
-import type { Subject, Variant, Question, TestQuestion, TestResult, TestAttempt, ReviewQuestion } from '../types';
+import type { Subject, Variant, Question, TestQuestion, TestResult, TestAttempt, ReviewQuestion, AnswerValue, ExamSession, ExamSection, Passage } from '../types';
 
 // Subjects
 export async function getSubjects(): Promise<Subject[]> {
@@ -134,7 +134,8 @@ export async function getQuestionsByVariantPaginated(
 
 // Текст вопроса и вариантов на языке интерфейса: казахский — если он заполнен, иначе основной
 export function localizeQuestion<T extends Pick<TestQuestion, 'question_text' | 'option_a' | 'option_b' | 'option_c' | 'option_d'
-  | 'question_text_kz' | 'option_a_kz' | 'option_b_kz' | 'option_c_kz' | 'option_d_kz'>>(question: T, language: 'kz' | 'ru'): T {
+  | 'question_text_kz' | 'option_a_kz' | 'option_b_kz' | 'option_c_kz' | 'option_d_kz'>
+  & Partial<Pick<TestQuestion, 'option_e' | 'option_f' | 'option_e_kz' | 'option_f_kz'>>>(question: T, language: 'kz' | 'ru'): T {
   if (language !== 'kz') return question;
   return {
     ...question,
@@ -143,13 +144,47 @@ export function localizeQuestion<T extends Pick<TestQuestion, 'question_text' | 
     option_b: question.option_b_kz || question.option_b,
     option_c: question.option_c_kz || question.option_c,
     option_d: question.option_d_kz || question.option_d,
+    option_e: question.option_e_kz || question.option_e,
+    option_f: question.option_f_kz || question.option_f,
   };
 }
 
-// Необязательные поля вопроса (SQL 10): перевод, тема, сложность, картинка, объяснение
+// Контекстный текст на языке интерфейса
+export function localizePassage(passage: Pick<Passage, 'text_ru' | 'text_kz'>, language: 'kz' | 'ru'): string {
+  return language === 'kz' && passage.text_kz ? passage.text_kz : passage.text_ru;
+}
+
+// Необязательные поля вопроса: перевод, тема, сложность, картинка, объяснение (SQL 10),
+// тип вопроса, варианты E–F, ключ, утверждения и контекстный текст (SQL 12)
 export type QuestionExtras = Partial<Pick<Question,
   'question_text_kz' | 'option_a_kz' | 'option_b_kz' | 'option_c_kz' | 'option_d_kz'
-  | 'topic' | 'difficulty' | 'image_url' | 'explanation_ru' | 'explanation_kz'>>;
+  | 'topic' | 'difficulty' | 'image_url' | 'explanation_ru' | 'explanation_kz'
+  | 'question_type' | 'option_e' | 'option_f' | 'option_e_kz' | 'option_f_kz'
+  | 'correct_key' | 'match_left' | 'passage_id'>>;
+
+// Контекстные тексты варианта (только админ)
+export async function getPassages(variantId: number): Promise<Passage[]> {
+  const { data, error } = await supabase.from('passages').select('*').eq('variant_id', variantId).order('id');
+  if (error) throw error;
+  return data || [];
+}
+
+export async function createPassage(passage: { variant_id: number; title: string | null; text_ru: string; text_kz: string | null }): Promise<Passage> {
+  const { data, error } = await supabase.from('passages').insert(passage).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updatePassage(id: number, updates: Partial<Pick<Passage, 'title' | 'text_ru' | 'text_kz'>>): Promise<Passage> {
+  const { data, error } = await supabase.from('passages').update(updates).eq('id', id).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deletePassage(id: number): Promise<void> {
+  const { error } = await supabase.from('passages').delete().eq('id', id);
+  if (error) throw error;
+}
 
 // Загрузка картинки вопроса в публичный bucket question-images; возвращает ссылку
 export async function uploadQuestionImage(file: File): Promise<string> {
@@ -167,13 +202,15 @@ export async function createQuestion(question: {
   option_b: string;
   option_c: string;
   option_d: string;
-  correct_answer: 'A' | 'B' | 'C' | 'D';
+  // null — у вопросов multiple и matching ключ лежит в correct_key
+  correct_answer: 'A' | 'B' | 'C' | 'D' | null;
   order_num?: number;
 } & QuestionExtras): Promise<Question> {
   const { data, error } = await supabase
     .from('questions')
     .insert({
       ...question,
+      // балл вопроса сервер выставит сам по его типу (SQL 12)
       score: 1,
       order_num: question.order_num ?? 1,
     })
@@ -184,7 +221,10 @@ export async function createQuestion(question: {
   return data;
 }
 
-export async function updateQuestion(id: number, updates: Partial<Question>): Promise<Question> {
+export async function updateQuestion(
+  id: number,
+  updates: Partial<Omit<Question, 'correct_answer'>> & { correct_answer?: Question['correct_answer'] | null },
+): Promise<Question> {
   const { data, error } = await supabase
     .from('questions')
     .update(updates)
@@ -286,13 +326,13 @@ function withTimeout<T>(promise: Promise<T>, ms = 15000): Promise<T> {
   });
 }
 
-export type AnswerKey = Record<string, Question['correct_answer'] | null>;
+export type AnswerKey = Record<string, AnswerValue | null>;
 
-// Сдача теста: балл считает сервер (RPC submit_test_result, SQL 08).
-// answers: {question_id: 'A'|'B'|'C'|'D'}; в ответ — результат и ключ правильных ответов.
+// Сдача теста: балл считает сервер (RPC submit_test_result, SQL 08 / 12).
+// answers: {question_id: ответ}; в ответ — результат и ключ правильных ответов.
 export async function saveTestResult(result: {
   variant_id: number;
-  answers: Record<string, string>;
+  answers: Record<string, AnswerValue>;
 }): Promise<{ result: TestResult; answerKey: AnswerKey }> {
   return withTimeout((async () => {
     const { data, error } = await supabase.rpc('submit_test_result', {
@@ -303,6 +343,71 @@ export async function saveTestResult(result: {
     if (!data?.result) throw new Error('submit_test_result returned no row');
     return { result: data.result as TestResult, answerKey: (data.answer_key || {}) as AnswerKey };
   })());
+}
+
+// ── Полный ЕНТ (SQL 12) ──────────────────────────────────────────────
+
+export interface FullExamOption {
+  subject_id: number;
+  subject: string;
+  // обязательный предмет: в тест попадает сам, выбрать его профильным нельзя
+  required: boolean;
+  variants: number;
+}
+
+// Предметы, по которым есть варианты с вопросами
+export async function getFullExamOptions(): Promise<FullExamOption[]> {
+  const { data, error } = await supabase.rpc('get_full_exam_options');
+  if (error) throw error;
+  return (data || []) as FullExamOption[];
+}
+
+// Незавершённый полный тест ученика, если его время ещё не вышло
+export async function getOpenFullExam(userId: string): Promise<ExamSession | null> {
+  const { data, error } = await supabase
+    .from('exam_sessions')
+    .select('*')
+    .eq('student_id', userId)
+    .eq('status', 'open')
+    .gt('expires_at', new Date().toISOString())
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// Старт полного теста или продолжение незавершённого (тогда выбор предметов не учитывается).
+// msLeft посчитан по часам сервера.
+export async function startFullExam(profileSubjectIds: number[] | null): Promise<{
+  session: ExamSession;
+  sections: ExamSection[];
+  msLeft: number;
+}> {
+  const { data, error } = await supabase.rpc('start_full_exam', { p_profile_subject_ids: profileSubjectIds });
+  if (error) throw error;
+  const session = data.session as ExamSession;
+  return {
+    session,
+    sections: (data.sections || []) as ExamSection[],
+    msLeft: Math.max(0, new Date(session.expires_at).getTime() - new Date(data.server_now).getTime()),
+  };
+}
+
+// Сдача полного теста: по каждому разделу создаётся свой результат
+export async function submitFullExam(sessionId: number, answers: Record<string, AnswerValue>): Promise<{
+  session: ExamSession;
+  results: TestResult[];
+  answerKey: AnswerKey;
+}> {
+  return withTimeout((async () => {
+    const { data, error } = await supabase.rpc('submit_full_exam', { p_session_id: sessionId, p_answers: answers });
+    if (error) throw error;
+    if (!data?.session) throw new Error('submit_full_exam returned no session');
+    return {
+      session: data.session as ExamSession,
+      results: (data.results || []) as TestResult[],
+      answerKey: (data.answer_key || {}) as AnswerKey,
+    };
+  })(), 30000);
 }
 
 // Get statistics for user

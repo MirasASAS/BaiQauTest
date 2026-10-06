@@ -1,20 +1,21 @@
 import { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion, animate } from 'framer-motion';
-import { CheckCircle, AlertCircle, Check, Trophy, FileQuestion, Calculator, Monitor, Globe, Globe2, Leaf, Atom, FlaskConical, MapPin, BookOpen, ArrowLeft, Loader2, Sparkles, RotateCcw, ChevronDown } from 'lucide-react';
+import { CheckCircle, AlertCircle, Check, Trophy, FileQuestion, Calculator, Monitor, Globe, Globe2, Leaf, Atom, FlaskConical, MapPin, BookOpen, ArrowLeft, Loader2, Sparkles, RotateCcw, ChevronDown, GraduationCap, Sigma, BookText } from 'lucide-react';
 import { useAuth } from '@baiqautest/shared';
 import { useLanguage } from '@baiqautest/shared';
 import { LanguageSwitcher } from '@baiqautest/shared';
 import { getSubjects, getVariants, getVariantsBySubjectId, startTestAttempt, getTestResultByVariant, saveTestResult, getUserStats } from '@baiqautest/shared';
 import { getStudyRecommendation, playSelect, playFinish } from '@baiqautest/shared';
-import { getLeaderboard, getMyRank, getUserStreak, getMyTopicStats, getMyMistakes, type LeaderboardEntry, type LeaderboardPeriod, type MyRank, type TopicStat, type MistakesSummary } from '@baiqautest/shared';
-import { useSubjectLabel } from '@baiqautest/shared';
-import type { Subject, Variant, TestQuestion } from '@baiqautest/shared';
+import { getLeaderboard, getMyRank, getUserStreak, getMyTopicStats, getMyMistakes, getLastWeekWinners, getOpenFullExam, type LeaderboardEntry, type LeaderboardPeriod, type MyRank, type TopicStat, type MistakesSummary, type WeekWinner } from '@baiqautest/shared';
+import { useSubjectLabel, isAnswered, scoreAnswer, maxScore, formatAnswer, withAnswerKey } from '@baiqautest/shared';
+import type { Subject, Variant, TestQuestion, AnswerValue } from '@baiqautest/shared';
 import { ReviewItem } from './ReviewItem';
 import { ExamScreen } from './ExamScreen';
 import { MistakesPractice } from './MistakesPractice';
+import { FullExam } from './FullExam';
 
-type Stage = 'dashboard' | 'variants' | 'test' | 'result' | 'mistakes';
+type Stage = 'dashboard' | 'variants' | 'test' | 'result' | 'mistakes' | 'fullExam';
 
 // Deterministic numeric code from a UUID (used as user ID on the result page)
 function deriveCode(id: string): string {
@@ -51,8 +52,13 @@ export function TestsPage() {
   const [selectedVariant, setSelectedVariant] = useState<Variant | null>(null);
   const [questions, setQuestions] = useState<TestQuestion[]>([]);
   const [currentQuestion, setCurrentQuestion] = useState(0);
-  const [answers, setAnswers] = useState<Record<number, string>>({});
+  const [answers, setAnswers] = useState<Record<number, AnswerValue>>({});
   const [score, setScore] = useState(0);
+  // Максимум баллов сданной попытки (сумма баллов вопросов, а не их количество)
+  const [resultTotal, setResultTotal] = useState(0);
+  // Победители прошлой недели и незавершённый полный ЕНТ
+  const [weekWinners, setWeekWinners] = useState<WeekWinner[]>([]);
+  const [hasOpenFullExam, setHasOpenFullExam] = useState(false);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState({ testsCompleted: 0, averageScore: 0, bestResult: 0 });
   const [aiRecommendation, setAiRecommendation] = useState<string>('');
@@ -92,6 +98,8 @@ export function TestsPage() {
     biology: Leaf,
     geography: MapPin,
     english: Globe,
+    math_literacy: Sigma,
+    reading_literacy: BookText,
   };
 
   function getSubjectIcon(name: string): typeof Calculator {
@@ -157,6 +165,9 @@ export function TestsPage() {
     getMyMistakes(null, 1)
       .then(data => { if (active) setMistakes(data); })
       .catch(() => { /* SQL 11 ещё не применён — блок просто не показываем */ });
+    getOpenFullExam(user.id)
+      .then(session => { if (active) setHasOpenFullExam(!!session); })
+      .catch(() => { /* SQL 12 ещё не применён */ });
     return () => { active = false; };
   }, [stage, user]);
 
@@ -166,15 +177,18 @@ export function TestsPage() {
     let active = true;
     (async () => {
       try {
-        const [s, lb, rank] = await Promise.all([
+        const [s, lb, rank, winners] = await Promise.all([
           getUserStreak().catch(() => 0),
           getLeaderboard(lbPeriod).catch(() => []),
           getMyRank(lbPeriod).catch(() => null),
+          // SQL 13 ещё не применён — блок победителей просто не показываем
+          getLastWeekWinners().catch(() => []),
         ]);
         if (!active) return;
         setStreak(s);
         setLeaderboard(lb);
         setMyRank(rank);
+        setWeekWinners(winners);
       } catch { /* ignore */ }
     })();
     return () => { active = false; };
@@ -315,11 +329,15 @@ export function TestsPage() {
     }
   }, [stage, selectedVariant, user?.id]);
 
-  function selectAnswer(answer: string) {
-    const wasAnswered = answers[currentQuestion];
-    setAnswers(prev => ({ ...prev, [currentQuestion]: answer }));
+  function selectAnswer(answer: AnswerValue | null) {
+    setAnswers(prev => {
+      const next = { ...prev };
+      if (answer === null) delete next[currentQuestion];
+      else next[currentQuestion] = answer;
+      return next;
+    });
     // Верность ответа во время теста неизвестна (ключ приходит с сервера после сдачи)
-    if (answer !== wasAnswered) playSelect();
+    if (answer !== null && formatAnswer(answer) !== formatAnswer(answers[currentQuestion])) playSelect();
   }
 
   function goBackToVariants() {
@@ -336,9 +354,9 @@ export function TestsPage() {
     setShowFinishConfirm(false);
     setSubmitError(null);
 
-    const answersById: Record<string, string> = {};
+    const answersById: Record<string, AnswerValue> = {};
     questions.forEach((q, i) => {
-      if (answers[i]) answersById[q.id] = answers[i];
+      if (isAnswered(answers[i])) answersById[q.id] = answers[i];
     });
 
     try {
@@ -348,8 +366,9 @@ export function TestsPage() {
         answers: answersById,
       });
       setScore(result.score);
+      setResultTotal(result.total_score);
       setResultRanked(result.is_ranked !== false);
-      setQuestions(prev => prev.map(q => ({ ...q, correct_answer: answerKey[q.id] ?? null })));
+      setQuestions(prev => prev.map(q => withAnswerKey(q, answerKey[q.id])));
     } catch (err) {
       // Не сохранилось — остаёмся в тесте, ответы лежат в localStorage, можно повторить
       console.error('Error saving result:', err);
@@ -571,6 +590,23 @@ export function TestsPage() {
           </div>
         ) : (
           <div>
+            {/* Полный ЕНТ: несколько предметов в одной попытке */}
+            <div className="mb-8 rounded-2xl bg-gradient-to-r from-[#1e3a8a] to-[#2563eb] text-white p-5 sm:p-6 flex items-center gap-4 flex-wrap">
+              <div className="w-14 h-14 rounded-2xl bg-white/15 flex items-center justify-center flex-shrink-0">
+                <GraduationCap className="w-8 h-8" />
+              </div>
+              <div className="flex-1 min-w-[200px]">
+                <h2 className="text-xl font-bold">{tTest('fullExamTitle')}</h2>
+                <p className="text-sm text-blue-100 mt-1">{tTest(hasOpenFullExam ? 'fullExamResumeDesc' : 'fullExamDesc')}</p>
+              </div>
+              <button
+                onClick={() => setStage('fullExam')}
+                className="flex-shrink-0 px-6 py-3 bg-white text-[#1e3a8a] font-bold rounded-xl hover:bg-blue-50"
+              >
+                {tTest(hasOpenFullExam ? 'fullExamResume' : 'fullExamStart')}
+              </button>
+            </div>
+
             <h2 className="text-xl font-bold text-gray-900 mb-4">{t('selectSubject')}</h2>
             <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               {subjects.map(subject => {
@@ -618,6 +654,25 @@ export function TestsPage() {
                 ))}
               </div>
             </div>
+            {weekWinners.length > 0 && (
+              <div className="mb-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+                <p className="text-sm font-bold text-amber-900 mb-2">👑 {tTest('lastWeekWinners')}</p>
+                <div className="flex flex-wrap gap-2">
+                  {weekWinners.map(w => (
+                    <span
+                      key={w.place}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm bg-white border ${
+                        user && w.user_id === user.id ? 'border-[#2563eb] text-[#1e3a8a] font-bold' : 'border-amber-200 text-gray-800 font-medium'
+                      }`}
+                    >
+                      {w.place === 1 ? '🥇' : w.place === 2 ? '🥈' : '🥉'} {w.nickname}
+                      <span className="text-gray-400 font-normal">· {w.points} {tTest('points')}</span>
+                    </span>
+                  ))}
+                </div>
+                <p className="text-xs text-amber-800/80 mt-2">{tTest('weekPrizeHint')}</p>
+              </div>
+            )}
             <div className="card p-2 divide-y divide-gray-100">
               {leaderboard.length === 0 && (
                 <p className="px-4 py-6 text-sm text-gray-500 text-center">{tTest('lbEmptyWeek')}</p>
@@ -793,6 +848,10 @@ export function TestsPage() {
     return <MistakesPractice subjectId={mistakesSubjectId} onClose={reset} />;
   }
 
+  if (stage === 'fullExam') {
+    return <FullExam onClose={reset} />;
+  }
+
   // ── Full-screen exam (testcenter.kz style) ──────────────────────────────────
   if (stage === 'test' && selectedVariant) {
     return (
@@ -823,7 +882,8 @@ export function TestsPage() {
   }
   if (stage === 'result' && selectedVariant) {
     const totalQuestions = questions.length || selectedVariant.total_score;
-    const answeredCount = questions.filter((_, i) => i in answers).length;
+    const totalPoints = resultTotal || questions.reduce((sum, q) => sum + maxScore(q), 0) || totalQuestions;
+    const answeredCount = questions.filter((_, i) => isAnswered(answers[i])).length;
     const fullName = [profile?.last_name, profile?.first_name].filter(Boolean).join(' ') || '—';
     const userCode = profile?.phone?.replace(/\D/g, '') || deriveCode(user?.id || '');
     const sections = [{ name: subjectLabel(selectedSubject?.name), score }];
@@ -831,12 +891,13 @@ export function TestsPage() {
     let correct = 0;
     let wrong = 0;
     let skipped = 0;
+    // «верно» — вопрос решён на полный балл; частично верный ответ идёт в «неверно»
     questions.forEach((q, i) => {
-      if (!(i in answers)) skipped++;
-      else if (answers[i] === q.correct_answer) correct++;
+      if (!isAnswered(answers[i])) skipped++;
+      else if (scoreAnswer(q, answers[i]) === maxScore(q)) correct++;
       else wrong++;
     });
-    const totalPct = totalQuestions > 0 ? Math.round((score / totalQuestions) * 100) : 0;
+    const totalPct = totalPoints > 0 ? Math.round((score / totalPoints) * 100) : 0;
     const donutC = 2 * Math.PI * 42;
     const donutSeg = (n: number) => (totalQuestions > 0 ? (n / totalQuestions) * donutC : 0);
 
@@ -922,7 +983,7 @@ export function TestsPage() {
               <div className="flex flex-col items-center justify-center py-5 border-t md:border-t-0 border-gray-100 bg-blue-50/40">
                 <span className="text-sm font-bold text-gray-600 mb-1">{tRes('total') + ':'}</span>
                 <span className="text-5xl font-bold text-[#2563eb] leading-none"><CountUp value={score} /></span>
-                <span className="text-sm text-gray-400 mt-2">{tRes('questionsCount', { count: totalQuestions })}</span>
+                <span className="text-sm text-gray-400 mt-2">{tRes('outOfPoints', { count: totalPoints })} · {tRes('questionsCount', { count: totalQuestions })}</span>
               </div>
             </div>
           </div>
@@ -1013,8 +1074,8 @@ export function TestsPage() {
                         {tRes('yourAnswer')}
                       </td>
                       {questions.map((_, i) => (
-                        <td key={i} className={`border border-gray-200 px-2 py-2 text-center font-medium ${answers[i] ? 'text-gray-800' : 'text-gray-300'}`}>
-                          {answers[i] || '-'}
+                        <td key={i} className={`border border-gray-200 px-2 py-2 text-center font-medium whitespace-nowrap ${isAnswered(answers[i]) ? 'text-gray-800' : 'text-gray-300'}`}>
+                          {formatAnswer(answers[i]) || '-'}
                         </td>
                       ))}
                     </tr>
@@ -1023,10 +1084,10 @@ export function TestsPage() {
                         {tRes('testResult')}
                       </td>
                       {questions.map((_, i) => {
-                        const ok = answers[i] === questions[i].correct_answer;
+                        const got = scoreAnswer(questions[i], answers[i]);
                         return (
-                          <td key={i} className={`border border-gray-200 px-2 py-2 text-center font-bold ${ok ? 'text-green-600' : 'text-red-500'}`}>
-                            {ok ? 1 : 0}
+                          <td key={i} className={`border border-gray-200 px-2 py-2 text-center font-bold ${got === maxScore(questions[i]) ? 'text-green-600' : got > 0 ? 'text-amber-600' : 'text-red-500'}`}>
+                            {got}
                           </td>
                         );
                       })}
@@ -1056,7 +1117,7 @@ export function TestsPage() {
                     key={q.id}
                     question={q}
                     index={i}
-                    userAnswer={answers[i] || null}
+                    userAnswer={answers[i] ?? null}
                     language={language}
                     tRes={tRes}
                   />

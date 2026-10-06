@@ -15,7 +15,13 @@ interface AuthContextType {
   profile: Profile | null;
   loading: boolean;
   passwordRecovery: boolean;
+  // true — вход (например, через Google) отклонён, потому что аккаунт заблокирован
+  blocked: boolean;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
+  signInWithGoogle: () => Promise<{ error: Error | null }>;
+  // Вход по телефону: код из SMS (нужен включённый Phone-провайдер в Supabase)
+  sendPhoneCode: (phone: string) => Promise<{ error: Error | null }>;
+  verifyPhoneCode: (phone: string, code: string) => Promise<{ error: Error | null }>;
   signUp: (email: string, password: string, profile: Partial<Profile>) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
   updateProfile: (profile: Partial<Profile>) => Promise<{ error: Error | null }>;
@@ -30,12 +36,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
+  const [blocked, setBlocked] = useState(false);
   const userIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session?.user) {
-        setUser({ id: session.user.id, email: session.user.email! });
+        // у вошедшего по телефону email нет
+        setUser({ id: session.user.id, email: session.user.email ?? '' });
         fetchProfile(session.user.id);
       }
       setLoading(false);
@@ -46,7 +54,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setPasswordRecovery(true);
       }
       if (session?.user) {
-        setUser({ id: session.user.id, email: session.user.email! });
+        setUser({ id: session.user.id, email: session.user.email ?? '' });
         fetchProfile(session.user.id);
       } else {
         setUser(null);
@@ -65,6 +73,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { data } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle();
       if (userIdRef.current !== userId) return;
       if (data) {
+        // Вход через Google или по SMS не проходит через signIn(), поэтому блокировку проверяем и здесь
+        if (data.is_blocked) {
+          userIdRef.current = null;
+          await supabase.auth.signOut();
+          setUser(null);
+          setProfile(null);
+          setBlocked(true);
+          return;
+        }
         setProfile(data as Profile);
         if (data.preferred_lang === 'kz' || data.preferred_lang === 'ru') {
           i18n.changeLanguage(data.preferred_lang);
@@ -75,7 +92,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  async function signInWithGoogle() {
+    setBlocked(false);
+    // Браузер уходит на страницу Google и возвращается на сайт уже с сессией
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: { redirectTo: window.location.origin },
+    });
+    return { error };
+  }
+
+  async function sendPhoneCode(phone: string) {
+    setBlocked(false);
+    const { error } = await supabase.auth.signInWithOtp({ phone });
+    return { error };
+  }
+
+  async function verifyPhoneCode(phone: string, code: string) {
+    const { error } = await supabase.auth.verifyOtp({ phone, token: code, type: 'sms' });
+    return { error };
+  }
+
   async function signIn(email: string, password: string) {
+    setBlocked(false);
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) return { error };
 
@@ -178,7 +217,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, profile, loading, passwordRecovery, signIn, signUp, signOut, updateProfile, resetPassword, updatePassword }}>
+    <AuthContext.Provider value={{ user, profile, loading, passwordRecovery, blocked, signIn, signInWithGoogle, sendPhoneCode, verifyPhoneCode, signUp, signOut, updateProfile, resetPassword, updatePassword }}>
       {children}
     </AuthContext.Provider>
   );

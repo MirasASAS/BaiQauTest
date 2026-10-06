@@ -42,6 +42,54 @@ export async function getStudyRecommendation(
   return invokeAI('ai-chat', { kind: 'recommendation', stats, language });
 }
 
+// Темы для вопросов, у которых тема не задана (админ, Edge Function ai-import).
+// knownTopics — темы, уже принятые в этом предмете: ИИ просят по возможности брать их,
+// чтобы один и тот же раздел не получил несколько разных названий.
+// Ответ: {id вопроса → тема}; вопросы, по которым ИИ ничего не вернул, в ответ не попадают.
+export async function suggestQuestionTopics(
+  subjectName: string,
+  questions: { id: number; question_text: string }[],
+  knownTopics: string[],
+): Promise<Record<number, string>> {
+  if (questions.length === 0) return {};
+  const list = questions.map(q => `${q.id}: ${q.question_text.replace(/\s+/g, ' ').slice(0, 400)}`).join('\n');
+  const known = knownTopics.length ? `\nУже используемые темы (бери их, если вопрос подходит):\n- ${knownTopics.slice(0, 60).join('\n- ')}\n` : '';
+  const prompt = `Предмет ЕНТ: ${subjectName}.
+Определи тему каждого тестового вопроса: 2–4 слова, название раздела школьной программы, на языке вопроса.
+${known}
+Вопросы в формате «id: текст»:
+${list}
+
+Ответ — ТОЛЬКО JSON-массив без другого текста: [{"id": 12, "topic": "Квадратные уравнения"}]`;
+
+  const response = await callGemini('Ты методист, который размечает тестовые вопросы ЕНТ по темам.', prompt, 0.2, 4096);
+
+  let jsonStr = response.trim();
+  const fenced = jsonStr.match(/```(?:json)?\s*\n?([\s\S]*?)\n?```/);
+  if (fenced) jsonStr = fenced[1].trim();
+  if (!jsonStr.startsWith('[')) {
+    const arrayMatch = jsonStr.match(/\[[\s\S]*\]/);
+    if (arrayMatch) jsonStr = arrayMatch[0];
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch {
+    throw new Error('AI generated invalid format');
+  }
+  if (!Array.isArray(parsed)) throw new Error('AI generated invalid format');
+
+  const allowed = new Set(questions.map(q => q.id));
+  const result: Record<number, string> = {};
+  for (const item of parsed as { id?: unknown; topic?: unknown }[]) {
+    const id = Number(item?.id);
+    const topic = typeof item?.topic === 'string' ? item.topic.trim().slice(0, 80) : '';
+    if (allowed.has(id) && topic) result[id] = topic;
+  }
+  return result;
+}
+
 export interface GeneratedQuestion {
   question_text: string;
   option_a: string;

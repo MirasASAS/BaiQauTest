@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import type { Question } from './types';
+import type { AnswerValue, Question } from './types';
 
 function toError(err: { message?: string; code?: string; details?: string } | null): Error {
   if (err?.message) return new Error(err.message);
@@ -109,7 +109,7 @@ export async function getMyTopicStats(): Promise<TopicStat[]> {
 export type MistakeQuestion = Question & {
   subject: string;
   // null — в попытке вопрос был пропущен
-  my_answer: string | null;
+  my_answer: AnswerValue | null;
 };
 
 export interface MistakesSummary {
@@ -129,8 +129,8 @@ export async function getMyMistakes(subjectId: number | null = null, limit = 20)
   };
 }
 
-// Ответ в тренировке проверяет сервер; верный ответ убирает вопрос из списка ошибок
-export async function recordMistakePractice(questionId: number, answer: string): Promise<{ is_correct: boolean; correct_answer: string }> {
+// Ответ в тренировке проверяет сервер; ответ на полный балл убирает вопрос из списка ошибок
+export async function recordMistakePractice(questionId: number, answer: AnswerValue): Promise<{ is_correct: boolean; score: number; correct_answer: AnswerValue }> {
   const { data, error } = await supabase.rpc('record_mistake_practice', { p_question_id: questionId, p_answer: answer });
   if (error) throw toError(error);
   return data;
@@ -170,5 +170,15 @@ export const BADGE_META: Record<string, { label: { kz: string; ru: string }; ico
     label: { kz: '90%+ балл алушы', ru: 'Набравший 90%+' },
     icon: '🏆',
     color: 'bg-violet-50 text-violet-600 border-violet-100',
+  },
+  week_champion: {
+    label: { kz: 'Апта жеңімпазы', ru: 'Победитель недели' },
+    icon: '👑',
+    color: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+  },
+  week_top3: {
+    label: { kz: 'Апта жүлдегері', ru: 'Призёр недели' },
+    icon: '🎖️',
+    color: 'bg-orange-50 text-orange-600 border-orange-100',
   },
 };

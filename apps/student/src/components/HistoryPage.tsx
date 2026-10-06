@@ -5,7 +5,7 @@ import { useAuth } from '@baiqautest/shared';
 import { useLanguage } from '@baiqautest/shared';
 import { getAllTestResults, getResultReview } from '@baiqautest/shared';
 import { useSubjectLabel } from '@baiqautest/shared';
-import type { TestResult, Variant, Subject, ReviewQuestion } from '@baiqautest/shared';
+import type { TestResult, Variant, Subject, ReviewQuestion, AnswerValue } from '@baiqautest/shared';
 import { ReviewItem } from './ReviewItem';
 
 type ResultWithDetails = TestResult & { variants: Variant; subjects: Subject };
@@ -51,7 +51,7 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
   const loadIdRef = useRef(0);
   const { t: tRes } = useTranslation('results');
   // Разбор выбранной попытки: вопросы с ключом + ответы ученика (RPC get_result_review)
-  const [review, setReview] = useState<{ questions: ReviewQuestion[]; answers: Record<string, string> | null } | null>(null);
+  const [review, setReview] = useState<{ questions: ReviewQuestion[]; answers: Record<string, AnswerValue> | null } | null>(null);
   const [reviewState, setReviewState] = useState<'idle' | 'loading' | 'error'>('idle');
 
   useEffect(() => {
@@ -251,6 +251,9 @@ export function HistoryPage({ onNavigate }: HistoryPageProps) {
                           <span className="text-gray-300">|</span>
                           <Calendar className="w-4 h-4" />
                           {formatDate(result.taken_at)}
+                          {result.exam_session_id != null && (
+                            <span className="px-2 py-0.5 rounded-md bg-blue-50 text-[#2563eb] text-xs font-bold">{tRes('fullExamBadge')}</span>
+                          )}
                           {result.is_ranked === false && (
                             <span className="px-2 py-0.5 rounded-md bg-gray-100 text-gray-500 text-xs font-medium">{tRes('unranked')}</span>
                           )}

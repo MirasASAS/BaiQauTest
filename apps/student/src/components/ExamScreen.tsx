@@ -1,12 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { motion, AnimatePresence } from 'framer-motion';
-import { AlertCircle, ArrowLeft, ArrowRight, Atom, Calculator, Check, Clock, Droplets, Grid3x3, LogOut, RotateCcw, WifiOff, X } from 'lucide-react';
-import { useLanguage, LanguageSwitcher, localizeQuestion, MathText } from '@baiqautest/shared';
-import type { TestQuestion } from '@baiqautest/shared';
+import { AlertCircle, ArrowLeft, ArrowRight, Atom, Calculator, Clock, Droplets, Grid3x3, LogOut, RotateCcw, WifiOff, Wrench, X } from 'lucide-react';
+import { useLanguage, LanguageSwitcher, localizeQuestion, MathText, ANSWER_LETTERS, isAnswered, formatAnswer, questionType } from '@baiqautest/shared';
+import type { AnswerValue, TestQuestion } from '@baiqautest/shared';
 import { Calculator as CalculatorTool, PeriodicTable, SolubilityTable } from './exam-tools';
+import { QuestionAnswer, PassageBlock, pickLetter } from './QuestionAnswer';
 
-const OPTIONS = ['A', 'B', 'C', 'D'] as const;
+// Раздел полного ЕНТ: вопросы идут одним списком, раздел — его отрезок
+export interface ExamScreenSection {
+  name: string;
+  start: number;
+  count: number;
+}
 
 // Кнопки с глобальным hover-масштабом (index.css) здесь не должны «прыгать»
 const FLAT = 'hover:!transform-none active:!transform-none';
@@ -26,9 +32,12 @@ interface ExamScreenProps {
   questions: TestQuestion[];
   currentQuestion: number;
   onNavigate: (index: number) => void;
+  // Разделы (только полный ЕНТ); без них тест — один предмет
+  sections?: ExamScreenSection[];
   // Ответы по индексу вопроса
-  answers: Record<number, string>;
-  onSelectAnswer: (answer: string) => void;
+  answers: Record<number, AnswerValue>;
+  // null — ответ на текущий вопрос снят
+  onSelectAnswer: (answer: AnswerValue | null) => void;
   onResetAnswers: () => void;
   timeLeft: number;
   totalSeconds: number;
@@ -52,6 +61,7 @@ export function ExamScreen({
   subjectName,
   variantName,
   questions,
+  sections,
   currentQuestion,
   onNavigate,
   answers,
@@ -73,11 +83,13 @@ export function ExamScreen({
   const { t: tTest } = useTranslation('test');
   const [showAnswerCard, setShowAnswerCard] = useState(false);
   const [openTool, setOpenTool] = useState<'calc' | 'mendeleev' | 'solubility' | null>(null);
+  // Панель инструментов на телефоне: боковой панели там нет
+  const [showToolSheet, setShowToolSheet] = useState(false);
 
-  // Клавиатура: 1–4 — ответ, ←/→ — соседний вопрос, Enter — дальше.
+  // Клавиатура: 1–6 — ответ, ←/→ — соседний вопрос, Enter — дальше.
   // Пока открыто любое окно (калькулятор, карта ответов, подтверждение) клавиши экзамена молчат,
   // иначе цифры калькулятора выбирали бы ответы.
-  const modalOpen = showAnswerCard || openTool !== null || showFinishConfirm || !!submitError || timeUp;
+  const modalOpen = showAnswerCard || showToolSheet || openTool !== null || showFinishConfirm || !!submitError || timeUp;
   useEffect(() => {
     if (loading || modalOpen || questions.length === 0) return;
     const handler = (e: KeyboardEvent) => {
@@ -86,8 +98,12 @@ export function ExamScreen({
         onNavigate(Math.min(last, currentQuestion + 1));
       } else if (e.key === 'ArrowLeft') {
         onNavigate(Math.max(0, currentQuestion - 1));
-      } else if (e.key >= '1' && e.key <= '4') {
-        onSelectAnswer(OPTIONS[Number(e.key) - 1]);
+      } else if (e.key >= '1' && e.key <= '6') {
+        // в вопросе на соответствие буква без утверждения ничего не значит
+        const target = questions[currentQuestion];
+        if (!target || questionType(target) === 'matching') return;
+        const next = pickLetter(target, answers[currentQuestion], ANSWER_LETTERS[Number(e.key) - 1]);
+        if (next !== undefined && next !== answers[currentQuestion]) onSelectAnswer(next);
       } else if (e.key === 'Enter') {
         e.preventDefault();
         if (currentQuestion < last) onNavigate(currentQuestion + 1);
@@ -96,7 +112,7 @@ export function ExamScreen({
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [loading, modalOpen, questions.length, currentQuestion, onNavigate, onSelectAnswer, onFinishConfirmChange]);
+  }, [loading, modalOpen, questions, answers, currentQuestion, onNavigate, onSelectAnswer, onFinishConfirmChange]);
   const currentNavRef = useRef<HTMLButtonElement>(null);
 
   // Текущий номер всегда виден в ленте, даже когда вопросов много
@@ -134,15 +150,12 @@ export function ExamScreen({
     );
   }
   const question = localizeQuestion(rawQuestion, language);
-  const optionText: Record<(typeof OPTIONS)[number], string> = {
-    A: question.option_a,
-    B: question.option_b,
-    C: question.option_c,
-    D: question.option_d,
-  };
+  const answered = (index: number) => isAnswered(answers[index]);
+  const sectionIndex = sections ? sections.findIndex(s => currentQuestion >= s.start && currentQuestion < s.start + s.count) : -1;
+  const currentSection = sections && sectionIndex >= 0 ? sections[sectionIndex] : null;
 
   const total = questions.length;
-  const answeredCount = questions.filter((_, i) => i in answers).length;
+  const answeredCount = questions.filter((_, i) => answered(i)).length;
   const isLast = currentQuestion === total - 1;
   const isDanger = timeLeft <= 60;
   const isWarn = !isDanger && timeLeft <= 300;
@@ -160,7 +173,7 @@ export function ExamScreen({
 
   const navButtonClass = (index: number) => {
     if (index === currentQuestion) return 'bg-[#2563eb] border-[#2563eb] text-white shadow-md shadow-blue-200';
-    if (index in answers) return 'bg-blue-50 border-blue-200 text-[#2563eb]';
+    if (answered(index)) return 'bg-blue-50 border-blue-200 text-[#2563eb]';
     return 'bg-white border-gray-200 text-gray-500 hover:border-gray-300';
   };
 
@@ -179,7 +192,7 @@ export function ExamScreen({
           </button>
 
           <div className="min-w-0 flex-1">
-            <p className="text-base sm:text-xl font-bold leading-tight truncate">{subjectName}</p>
+            <p className="text-base sm:text-xl font-bold leading-tight truncate">{currentSection?.name || subjectName}</p>
             <p className="text-xs sm:text-sm text-blue-100 truncate">
               {variantName}
               {studentName && <span className="hidden sm:inline"> · {studentName}</span>}
@@ -261,6 +274,28 @@ export function ExamScreen({
 
         {/* ── Main area ──────────────────────────────────────────────── */}
         <div className="flex-1 flex flex-col min-w-0">
+          {/* Разделы полного ЕНТ */}
+          {sections && sections.length > 1 && (
+            <div className="flex-shrink-0 bg-[#f1f5f9] border-b border-gray-200 px-3 sm:px-6 py-2 flex items-center gap-2 overflow-x-auto">
+              {sections.map((section, i) => {
+                const done = questions.slice(section.start, section.start + section.count).filter((_, k) => answered(section.start + k)).length;
+                return (
+                  <button
+                    key={i}
+                    onClick={() => onNavigate(section.start)}
+                    aria-current={i === sectionIndex ? 'true' : undefined}
+                    className={`flex-shrink-0 px-3.5 py-2 rounded-xl text-sm font-bold whitespace-nowrap ${FLAT} ${
+                      i === sectionIndex ? 'bg-[#1e3a8a] text-white' : 'bg-white border border-gray-200 text-gray-600 hover:border-gray-300'
+                    }`}
+                  >
+                    {section.name}
+                    <span className={`ml-2 font-medium tabular-nums ${i === sectionIndex ? 'text-blue-200' : 'text-gray-400'}`}>{done}/{section.count}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           {/* Question number strip */}
           <div className="flex-shrink-0 bg-white border-b border-gray-200 px-3 sm:px-6 py-3">
             <div className="flex items-center justify-between gap-3 mb-2.5">
@@ -275,16 +310,17 @@ export function ExamScreen({
                   />
                 </div>
                 <button
-                  onClick={() => setShowAnswerCard(true)}
+                  onClick={() => setShowToolSheet(true)}
                   className="sm:hidden flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-50 text-[#2563eb] text-sm font-medium"
                 >
-                  <Grid3x3 className="w-4 h-4" />
-                  {tTest('answerCard')}
+                  <Wrench className="w-4 h-4" />
+                  {tTest('tools')}
                 </button>
               </div>
             </div>
             <div className="flex items-center gap-2 overflow-x-auto pb-1">
-              {questions.map((_, i) => (
+              {/* в полном ЕНТ лента показывает вопросы текущего раздела с нумерацией внутри него */}
+              {questions.map((_, i) => (currentSection && (i < currentSection.start || i >= currentSection.start + currentSection.count) ? null : (
                 <button
                   key={i}
                   ref={i === currentQuestion ? currentNavRef : undefined}
@@ -292,9 +328,9 @@ export function ExamScreen({
                   aria-current={i === currentQuestion ? 'step' : undefined}
                   className={`min-w-[44px] h-11 px-2 rounded-xl text-base font-bold flex-shrink-0 border-2 ${FLAT} ${navButtonClass(i)}`}
                 >
-                  {i + 1}
+                  {i + 1 - (currentSection?.start ?? 0)}
                 </button>
-              ))}
+              )))}
             </div>
           </div>
 
@@ -311,9 +347,17 @@ export function ExamScreen({
                   className="bg-white rounded-3xl border border-gray-200 shadow-sm overflow-hidden"
                 >
                   <div className="px-5 sm:px-10 pt-6 sm:pt-9 pb-5 sm:pb-7">
-                    <span className="inline-flex items-center px-3.5 py-1.5 rounded-full bg-blue-50 text-[#2563eb] text-sm font-bold mb-4">
-                      {tTest('question')} {currentQuestion + 1} {tTest('of')} {total}
-                    </span>
+                    <div className="flex flex-wrap items-center gap-2 mb-4">
+                      <span className="inline-flex items-center px-3.5 py-1.5 rounded-full bg-blue-50 text-[#2563eb] text-sm font-bold">
+                        {tTest('question')} {currentQuestion + 1 - (currentSection?.start ?? 0)} {tTest('of')} {currentSection?.count ?? total}
+                      </span>
+                      {(question.score ?? 1) > 1 && (
+                        <span className="inline-flex items-center px-3 py-1.5 rounded-full bg-amber-50 text-amber-700 text-sm font-bold">
+                          {tTest('pointsBadge', { count: question.score })}
+                        </span>
+                      )}
+                    </div>
+                    {rawQuestion.passage && <PassageBlock passage={rawQuestion.passage} language={language} />}
                     <p className="text-xl sm:text-2xl font-semibold text-gray-900 leading-relaxed whitespace-pre-line">
                       <MathText text={question.question_text} />
                     </p>
@@ -322,40 +366,14 @@ export function ExamScreen({
                     )}
                   </div>
 
-                  <div className="px-4 sm:px-8 pb-6 sm:pb-9 space-y-3">
-                    {OPTIONS.map((option, index) => {
-                      const isSelected = answers[currentQuestion] === option;
-                      return (
-                        <button
-                          key={option}
-                          onClick={() => onSelectAnswer(option)}
-                          aria-pressed={isSelected}
-                          className={`w-full flex items-center gap-4 px-4 sm:px-5 py-4 sm:py-5 rounded-2xl border-2 text-left ${FLAT} ${
-                            isSelected
-                              ? 'border-[#2563eb] bg-blue-50 shadow-sm'
-                              : 'border-gray-200 bg-white hover:border-blue-200 hover:bg-slate-50'
-                          }`}
-                        >
-                          <span className={`flex-shrink-0 w-11 h-11 sm:w-12 sm:h-12 rounded-xl flex items-center justify-center text-lg font-bold transition-colors ${
-                            isSelected ? 'bg-[#2563eb] text-white' : 'bg-slate-100 text-slate-600'
-                          }`}>
-                            {option}
-                          </span>
-                          <span className={`flex-1 min-w-0 text-base sm:text-lg leading-snug ${isSelected ? 'text-gray-900 font-semibold' : 'text-gray-800'}`}>
-                            <MathText text={optionText[option]} />
-                          </span>
-                          {isSelected ? (
-                            <span className="flex-shrink-0 w-8 h-8 rounded-full bg-[#2563eb] flex items-center justify-center">
-                              <Check className="w-5 h-5 text-white checkbox-bounce" />
-                            </span>
-                          ) : (
-                            <kbd className="hidden lg:flex flex-shrink-0 w-8 h-8 items-center justify-center rounded-lg border border-gray-200 text-xs font-semibold text-gray-400">
-                              {index + 1}
-                            </kbd>
-                          )}
-                        </button>
-                      );
-                    })}
+                  <div className="px-4 sm:px-8 pb-6 sm:pb-9">
+                    <QuestionAnswer
+                      question={rawQuestion}
+                      language={language}
+                      value={answers[currentQuestion]}
+                      onChange={onSelectAnswer}
+                      showKeys
+                    />
                   </div>
                 </motion.div>
               </AnimatePresence>
@@ -402,22 +420,73 @@ export function ExamScreen({
               </button>
             </div>
             <p className="text-sm text-gray-500 mb-5">{tTest('answeredOf', { answered: answeredCount, total })}</p>
-            <div className="grid grid-cols-5 sm:grid-cols-8 gap-2.5">
-              {questions.map((_, i) => (
-                <button
-                  key={i}
-                  onClick={() => { onNavigate(i); setShowAnswerCard(false); }}
-                  className={`h-12 rounded-xl border-2 flex flex-col items-center justify-center leading-none ${FLAT} ${navButtonClass(i)}`}
-                >
-                  <span className="text-sm font-bold">{i + 1}</span>
-                  <span className="text-[11px] font-semibold mt-0.5 opacity-80">{answers[i] || '–'}</span>
-                </button>
-              ))}
-            </div>
+            {(sections && sections.length > 1 ? sections : [{ name: '', start: 0, count: total }]).map((section, s) => (
+              <div key={s} className="mb-4 last:mb-0">
+                {section.name && <p className="text-sm font-bold text-gray-700 mb-2">{section.name}</p>}
+                <div className="grid grid-cols-5 sm:grid-cols-8 gap-2.5">
+                  {questions.slice(section.start, section.start + section.count).map((_, k) => {
+                    const i = section.start + k;
+                    const text = formatAnswer(answers[i]);
+                    return (
+                      <button
+                        key={i}
+                        onClick={() => { onNavigate(i); setShowAnswerCard(false); }}
+                        className={`h-12 rounded-xl border-2 flex flex-col items-center justify-center leading-none ${FLAT} ${navButtonClass(i)}`}
+                      >
+                        <span className="text-sm font-bold">{k + 1}</span>
+                        {/* длинный ответ (несколько букв, соответствие) в клетку не влезает */}
+                        <span className="text-[11px] font-semibold mt-0.5 opacity-80">{!text ? '–' : text.length <= 2 ? text : '✓'}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
             <div className="flex flex-wrap items-center gap-x-5 gap-y-2 mt-6 text-xs text-gray-500">
               <span className="flex items-center gap-2"><span className="w-4 h-4 rounded-md bg-[#2563eb]" />{tTest('legendCurrent')}</span>
               <span className="flex items-center gap-2"><span className="w-4 h-4 rounded-md bg-blue-50 border-2 border-blue-200" />{tTest('legendAnswered')}</span>
               <span className="flex items-center gap-2"><span className="w-4 h-4 rounded-md bg-white border-2 border-gray-200" />{tTest('legendUnanswered')}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Инструменты на телефоне: нижняя панель ─────────────────── */}
+      {showToolSheet && (
+        <div className="sm:hidden fixed inset-0 z-[60] bg-black/50 flex items-end" onClick={() => setShowToolSheet(false)}>
+          <div className="w-full bg-white rounded-t-3xl p-5 pb-7 shadow-xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-gray-900">{tTest('tools')}</h3>
+              <button onClick={() => setShowToolSheet(false)} className="p-2 text-gray-400 hover:bg-gray-100 rounded-xl" aria-label={tTest('close')}>
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              {tools.map(tool => {
+                const Icon = tool.icon;
+                return (
+                  <button
+                    key={tool.id}
+                    onClick={() => { setShowToolSheet(false); tool.onClick(); }}
+                    className={`flex flex-col items-center gap-2 px-3 py-4 rounded-2xl bg-[#DCEEFC] text-[#1e3a8a] ${FLAT}`}
+                  >
+                    <Icon className="w-7 h-7" />
+                    <span className="text-sm font-medium leading-tight text-center">{tool.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex items-center justify-between gap-3 mt-4">
+              <div className="bg-slate-100 rounded-xl">
+                <LanguageSwitcher />
+              </div>
+              <button
+                onClick={() => { if (confirm(tTest('resetAnswers'))) { onResetAnswers(); setShowToolSheet(false); } }}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium text-slate-500 hover:bg-slate-100 ${FLAT}`}
+              >
+                <RotateCcw className="w-4 h-4" />
+                {tTest('reset')}
+              </button>
             </div>
           </div>
         </div>

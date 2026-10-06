@@ -10,6 +10,8 @@
     "chemistry": "Химия",
     "biology": "Биология",
     "geography": "География",
-    "english": "Ағылшын тілі"
+    "english": "Ағылшын тілі",
+    "math_literacy": "Математикалық сауаттылық",
+    "reading_literacy": "Оқу сауаттылығы"
   }
 }

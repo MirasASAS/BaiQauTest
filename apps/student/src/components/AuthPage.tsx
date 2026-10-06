@@ -1,8 +1,29 @@
-import { useState } from 'react';
-import { Mail, Lock, User, Phone, ArrowRight, Check } from 'lucide-react';
-import { useAuth, AccountBlockedError } from '@baiqautest/shared';
+import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { Mail, Lock, User, Phone, ArrowRight, Check, Smartphone } from 'lucide-react';
+import { useAuth, AccountBlockedError, getAuthProviders } from '@baiqautest/shared';
 import { useLanguage } from '@baiqautest/shared';
 import { LanguageSwitcher } from '@baiqautest/shared';
+import type { AuthProviders } from '@baiqautest/shared';
+
+// Номер в формате E.164 для Казахстана: «8 777 123 45 67» и «777 123 45 67» → «+77771234567»
+function normalizePhone(value: string): string | null {
+  let digits = value.replace(/\D/g, '');
+  if (digits.length === 11 && digits.startsWith('8')) digits = '7' + digits.slice(1);
+  if (digits.length === 10) digits = '7' + digits;
+  return digits.length >= 11 && digits.length <= 15 ? '+' + digits : null;
+}
+
+function GoogleIcon() {
+  return (
+    <span
+      aria-hidden="true"
+      className="w-5 h-5 rounded-full bg-white border border-gray-200 flex items-center justify-center text-[13px] font-bold leading-none text-[#4285F4]"
+    >
+      G
+    </span>
+  );
+}
 
 export function AuthPage() {
   const [mode, setMode] = useState<'login' | 'register'>('login');
@@ -12,8 +33,101 @@ export function AuthPage() {
   const [recoveryEmail, setRecoveryEmail] = useState('');
   const [recoverySent, setRecoverySent] = useState(false);
   const [recoveryLoading, setRecoveryLoading] = useState(false);
-  const { signIn, signUp, resetPassword } = useAuth();
+  const { signIn, signUp, resetPassword, signInWithGoogle, sendPhoneCode, verifyPhoneCode, blocked } = useAuth();
   const { t } = useLanguage();
+  const { t: tRet } = useTranslation('retention');
+  // Кнопки показываются только для способов входа, включённых в проекте Supabase
+  const [providers, setProviders] = useState<AuthProviders>({ google: false, phone: false });
+  const [phoneMode, setPhoneMode] = useState(false);
+  const [phone, setPhone] = useState('');
+  const [phoneCode, setPhoneCode] = useState('');
+  // номер, на который отправлен код; null — код ещё не запрашивали
+  const [codeSentTo, setCodeSentTo] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    getAuthProviders().then(p => { if (active) setProviders(p); });
+    return () => { active = false; };
+  }, []);
+
+  async function handleGoogle() {
+    if (loading) return;
+    setLoading(true);
+    setError(null);
+    const { error } = await signInWithGoogle();
+    // при успехе браузер уходит на страницу Google, сюда попадаем только при ошибке
+    if (error) {
+      setError(tRet('googleError'));
+      setLoading(false);
+    }
+  }
+
+  async function handleSendCode(e: React.FormEvent) {
+    e.preventDefault();
+    if (loading) return;
+    const normalized = normalizePhone(phone);
+    if (!normalized) {
+      setError(tRet('phoneInvalid'));
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    const { error } = await sendPhoneCode(normalized);
+    if (error) setError(tRet('phoneSendError'));
+    else setCodeSentTo(normalized);
+    setLoading(false);
+  }
+
+  async function handleVerifyCode(e: React.FormEvent) {
+    e.preventDefault();
+    if (loading || !codeSentTo) return;
+    setLoading(true);
+    setError(null);
+    const { error } = await verifyPhoneCode(codeSentTo, phoneCode.trim());
+    if (error) setError(tRet('phoneCodeError'));
+    setLoading(false);
+  }
+
+  function leavePhoneMode() {
+    setPhoneMode(false);
+    setCodeSentTo(null);
+    setPhoneCode('');
+    setError(null);
+  }
+
+  const socialButtons = (providers.google || providers.phone) && (
+    <div className="mt-5">
+      <div className="flex items-center gap-3 mb-4">
+        <div className="flex-1 h-px bg-gray-200" />
+        <span className="text-xs text-gray-400 uppercase">{tRet('or')}</span>
+        <div className="flex-1 h-px bg-gray-200" />
+      </div>
+      <div className="space-y-2.5">
+        {providers.google && (
+          <button
+            type="button"
+            onClick={handleGoogle}
+            disabled={loading}
+            className="w-full flex items-center justify-center gap-3 py-3 border border-gray-200 hover:bg-gray-50 text-gray-700 font-medium rounded-xl transition-colors disabled:opacity-50"
+          >
+            <GoogleIcon />
+            {tRet('continueWithGoogle')}
+          </button>
+        )}
+        {providers.phone && (
+          <button
+            type="button"
+            onClick={() => { setPhoneMode(true); setError(null); }}
+            disabled={loading}
+            className="w-full flex items-center justify-center gap-3 py-3 border border-gray-200 hover:bg-gray-50 text-gray-700 font-medium rounded-xl transition-colors disabled:opacity-50"
+          >
+            <Smartphone className="w-5 h-5 text-gray-500" />
+            {tRet('continueWithPhone')}
+          </button>
+        )}
+      </div>
+    </div>
+  );
 
   const [loginData, setLoginData] = useState({ email: '', password: '' });
   const [registerData, setRegisterData] = useState({
@@ -123,13 +237,72 @@ export function AuthPage() {
 
           {/* Form */}
           <div className="p-6">
-            {error && (
+            {(error || blocked) && (
               <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-600 text-sm rounded-xl">
-                {error}
+                {error || t('accountBlocked')}
               </div>
             )}
 
-            {recoveryMode ? (
+            {phoneMode ? (
+              <form onSubmit={codeSentTo ? handleVerifyCode : handleSendCode} className="space-y-4">
+                {codeSentTo ? (
+                  <div>
+                    <p className="text-sm text-gray-600 mb-3">{tRet('phoneCodeSent', { phone: codeSentTo })}</p>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">{tRet('phoneCode')}</label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      required
+                      maxLength={8}
+                      value={phoneCode}
+                      onChange={e => setPhoneCode(e.target.value.replace(/\D/g, ''))}
+                      className="w-full px-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#2563eb]/20 focus:border-[#2563eb] transition-colors bg-gray-50 text-center text-xl tracking-[0.4em] font-bold"
+                      placeholder="000000"
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1.5">{t('phone')}</label>
+                    <div className="relative">
+                      <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                      <input
+                        type="tel"
+                        autoComplete="tel"
+                        required
+                        value={phone}
+                        onChange={e => setPhone(e.target.value)}
+                        className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-[#2563eb]/20 focus:border-[#2563eb] transition-colors bg-gray-50"
+                        placeholder="+7 (777) 123-45-67"
+                      />
+                    </div>
+                    <p className="text-xs text-gray-500 mt-2">{tRet('phoneHint')}</p>
+                  </div>
+                )}
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full flex items-center justify-center gap-2 bg-[#2563eb] hover:bg-[#1e3a8a] text-white font-medium py-3 rounded-xl transition-colors disabled:opacity-50"
+                >
+                  {loading ? '...' : tRet(codeSentTo ? 'phoneVerify' : 'phoneSend')}
+                  {!loading && <ArrowRight className="w-4 h-4" />}
+                </button>
+                <div className="flex items-center justify-between pt-1">
+                  <button type="button" onClick={leavePhoneMode} className="text-sm text-[#2563eb] hover:underline">
+                    {t('backToLogin')}
+                  </button>
+                  {codeSentTo && (
+                    <button
+                      type="button"
+                      onClick={() => { setCodeSentTo(null); setPhoneCode(''); setError(null); }}
+                      className="text-sm text-gray-500 hover:underline"
+                    >
+                      {tRet('phoneChange')}
+                    </button>
+                  )}
+                </div>
+              </form>
+            ) : recoveryMode ? (
               <form onSubmit={handleRecovery} className="space-y-4">
                 {recoverySent && (
                   <div className="mb-4 p-3 bg-green-50 border border-green-200 text-green-600 text-sm rounded-xl">
@@ -214,6 +387,7 @@ export function AuthPage() {
                     {t('forgotPassword')}
                   </button>
                 </div>
+                {socialButtons}
               </form>
             ) : (
               <form onSubmit={handleRegister} className="space-y-4">
@@ -325,6 +499,7 @@ export function AuthPage() {
                   {loading ? '...' : t('registerButton')}
                   {!loading && <ArrowRight className="w-4 h-4" />}
                 </button>
+                {socialButtons}
               </form>
             )}
           </div>

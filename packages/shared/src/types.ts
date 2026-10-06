@@ -27,6 +27,21 @@ export interface Variant {
   total_score: number;
 }
 
+export type QuestionType = 'single' | 'multiple' | 'matching';
+
+// Ответ ученика и ключ вопроса имеют одну форму (SQL 12):
+// single — "A"; multiple — ["A","C"]; matching — {"1":"B","2":"D"} (номер утверждения → буква)
+export type AnswerValue = string | string[] | Record<string, string>;
+
+// Общий текст контекстных вопросов
+export interface Passage {
+  id: number;
+  variant_id?: number;
+  title: string | null;
+  text_ru: string;
+  text_kz: string | null;
+}
+
 export interface Question {
   id: number;
   variant_id: number;
@@ -49,6 +64,17 @@ export interface Question {
   image_url?: string | null;
   explanation_ru?: string | null;
   explanation_kz?: string | null;
+  // Типы вопросов (SQL 12). Для multiple и matching correct_answer пуст, ключ лежит в correct_key
+  question_type?: QuestionType;
+  option_e?: string | null;
+  option_f?: string | null;
+  option_e_kz?: string | null;
+  option_f_kz?: string | null;
+  correct_key?: string[] | Record<string, string> | null;
+  // matching: утверждения слева, которым подбирается буква варианта
+  match_left?: { ru: string; kz?: string | null }[] | null;
+  passage_id?: number | null;
+  passage?: Passage | null;
 }
 
 // Вопрос в том виде, в каком его получает ученик: правильный ответ
@@ -64,11 +90,36 @@ export interface TestResult {
   score: number;
   total_score: number;
   taken_at: string;
-  answers?: Record<string, string> | null;
+  answers?: Record<string, AnswerValue> | null;
   attempt_id?: number | null;
   // false — попытка сохранена, но в рейтинг не идёт (пересдача или сдано после дедлайна)
   is_ranked?: boolean;
   duration_seconds?: number | null;
+  // результат раздела полного ЕНТ (SQL 12)
+  exam_session_id?: number | null;
+}
+
+// Полный ЕНТ: одна попытка из нескольких предметов с общим таймером
+export interface ExamSession {
+  id: number;
+  student_id: string;
+  status: 'open' | 'submitted' | 'expired';
+  sections: { subject_id: number; subject: string; variant_id: number; required: boolean }[];
+  started_at: string;
+  expires_at: string;
+  submitted_at: string | null;
+  score: number | null;
+  total_score: number | null;
+}
+
+export interface ExamSection {
+  subject_id: number;
+  subject: string;
+  variant_id: number;
+  required: boolean;
+  variant_name: string | null;
+  variant_number: number;
+  questions: TestQuestion[];
 }
 
 // Серверная попытка теста: дедлайн задаёт сервер (RPC start_test_attempt, SQL 09)

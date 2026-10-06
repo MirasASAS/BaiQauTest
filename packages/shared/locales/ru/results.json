@@ -32,5 +32,9 @@
   "unranked": "Вне рейтинга",
   "reviewLoading": "Загружаю разбор...",
   "reviewError": "Не удалось загрузить разбор",
-  "duration": "Время"
+  "duration": "Время",
+  "pointsOf": "Баллы",
+  "outOfPoints": "максимум {{count}}",
+  "fullExamBadge": "ЕНТ",
+  "fullExamPartlyUnranked": "Часть разделов не идёт в рейтинг: засчитывается только первая попытка варианта, сданная вовремя."
 }

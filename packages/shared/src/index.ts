@@ -4,6 +4,8 @@ export { supabase } from './supabase';
 export * from './api';
 export * from './lib/localStorage';
 export * from './lib/aiService';
+export * from './lib/answers';
+export * from './lib/retention';
 export * from './lib/sound';
 export * from './lib/subjects';
 export { AuthProvider, useAuth, AccountBlockedError } from './context/AuthContext';

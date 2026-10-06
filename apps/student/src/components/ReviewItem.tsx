@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Sparkles } from 'lucide-react';
-import { explainQuestion, localizeQuestion, MathText } from '@baiqautest/shared';
-import type { TestQuestion } from '@baiqautest/shared';
+import { explainQuestion, localizeQuestion, MathText, questionType, questionOptions, questionKey, matchLeft, scoreAnswer, maxScore, isAnswered, formatAnswer } from '@baiqautest/shared';
+import type { AnswerValue, TestQuestion } from '@baiqautest/shared';
+import { PassageBlock } from './QuestionAnswer';
 
 // Один вопрос в разборе сданной попытки: ответ ученика, правильный ответ, объяснение ИИ.
 // Используется на странице результата и в истории.
@@ -14,7 +15,7 @@ export function ReviewItem({
 }: {
   question: TestQuestion;
   index: number;
-  userAnswer: string | null;
+  userAnswer: AnswerValue | null;
   language: 'kz' | 'ru';
   tRes: (key: string) => string;
 }) {
@@ -25,21 +26,36 @@ export function ReviewItem({
   const [explainText, setExplainText] = useState('');
   const shownText = explainText || saved;
 
-  const isCorrect = userAnswer === question.correct_answer;
+  const type = questionType(question);
+  const options = questionOptions(question);
+  const key = questionKey(question);
+  const answered = isAnswered(userAnswer);
+  const max = maxScore(question);
+  const got = scoreAnswer(question, userAnswer);
+  const isCorrect = got === max;
+  const isPartial = got > 0 && got < max;
+
+  const pickedLetters: string[] = Array.isArray(userAnswer) ? userAnswer : typeof userAnswer === 'string' ? [userAnswer] : [];
+  const keyLetters: string[] = Array.isArray(key) ? key : typeof key === 'string' ? [key] : [];
+  const pairs = userAnswer && typeof userAnswer === 'object' && !Array.isArray(userAnswer) ? userAnswer : {};
+  const keyPairs = key && typeof key === 'object' && !Array.isArray(key) ? key : {};
 
   return (
     <div className="px-5 py-4">
       <div className="flex items-start gap-3">
         <span className={`flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold ${
-          userAnswer === null
+          !answered
             ? 'bg-slate-100 text-slate-400'
             : isCorrect
             ? 'bg-green-100 text-green-700'
+            : isPartial
+            ? 'bg-amber-100 text-amber-700'
             : 'bg-red-100 text-red-700'
         }`}>
-          {userAnswer === null ? '–' : isCorrect ? '✓' : '✗'}
+          {!answered ? '–' : isCorrect ? '✓' : isPartial ? '½' : '✗'}
         </span>
         <div className="flex-1 min-w-0">
+          {source.passage && <PassageBlock passage={source.passage} language={language} defaultOpen={false} />}
           <p className="text-sm font-semibold text-gray-800 mb-2">
             {index + 1}. <MathText text={question.question_text} />
           </p>
@@ -47,12 +63,12 @@ export function ReviewItem({
             <img src={question.image_url} alt="" className="max-h-48 rounded-lg border border-gray-200 mb-2" />
           )}
           <div className="grid grid-cols-2 gap-1.5 mb-2">
-            {(['A', 'B', 'C', 'D'] as const).map(opt => {
-              const optText = question[`option_${opt.toLowerCase() as 'a' | 'b' | 'c' | 'd'}`];
-              const isUserAns = userAnswer === opt;
-              const isCorrectAns = question.correct_answer === opt;
+            {options.map(opt => {
+              // в вопросе на соответствие варианты — справочный список, подсветка идёт по парам ниже
+              const isUserAns = type !== 'matching' && pickedLetters.includes(opt.letter);
+              const isCorrectAns = type !== 'matching' && keyLetters.includes(opt.letter);
               return (
-                <div key={opt} className={`px-3 py-1.5 rounded-lg text-xs border ${
+                <div key={opt.letter} className={`px-3 py-1.5 rounded-lg text-xs border ${
                   isUserAns && isCorrectAns
                     ? 'bg-green-50 border-green-200 text-green-700'
                     : isUserAns && !isCorrectAns
@@ -61,19 +77,44 @@ export function ReviewItem({
                     ? 'bg-green-50/50 border-green-100 text-green-600'
                     : 'bg-white border-gray-200 text-gray-600'
                 } ${isUserAns ? 'font-bold' : ''}`}>
-                  <span className="font-semibold mr-1">{opt})</span><MathText text={optText} />
+                  <span className="font-semibold mr-1">{opt.letter})</span><MathText text={opt.text} />
                 </div>
               );
             })}
           </div>
-          <div className="flex items-center gap-2 text-xs">
+          {type === 'matching' && (
+            <div className="space-y-1.5 mb-2">
+              {matchLeft(question, language).map((statement, i) => {
+                const id = String(i + 1);
+                const ok = pairs[id] !== undefined && pairs[id] === keyPairs[id];
+                return (
+                  <div key={id} className={`px-3 py-1.5 rounded-lg text-xs border ${
+                    ok ? 'bg-green-50 border-green-200' : pairs[id] ? 'bg-red-50 border-red-200' : 'bg-white border-gray-200'
+                  }`}>
+                    <span className="font-semibold mr-1">{id}.</span><MathText text={statement} />
+                    <span className="ml-2 font-bold whitespace-nowrap">
+                      <span className={ok ? 'text-green-700' : 'text-red-600'}>{pairs[id] || '–'}</span>
+                      {!ok && keyPairs[id] && <span className="text-green-700"> → {keyPairs[id]}</span>}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
             <span className="text-gray-400">
-              {tRes('yourAnswer')}: <span className={`font-bold ${userAnswer ? (isCorrect ? 'text-green-600' : 'text-red-500') : 'text-gray-400'}`}>{userAnswer || tRes('noAnswer')}</span>
+              {tRes('yourAnswer')}: <span className={`font-bold ${answered ? (isCorrect ? 'text-green-600' : isPartial ? 'text-amber-600' : 'text-red-500') : 'text-gray-400'}`}>{formatAnswer(userAnswer) || tRes('noAnswer')}</span>
             </span>
             <span className="text-gray-300">·</span>
             <span className="text-gray-400">
-              {tRes('correctAnswerShort')}: <span className="font-bold text-green-600">{question.correct_answer}</span>
+              {tRes('correctAnswerShort')}: <span className="font-bold text-green-600">{formatAnswer(key)}</span>
             </span>
+            {max > 1 && (
+              <>
+                <span className="text-gray-300">·</span>
+                <span className="text-gray-400">{tRes('pointsOf')}: <span className="font-bold text-gray-700">{got}/{max}</span></span>
+              </>
+            )}
           </div>
           {!shownText && (
             <button
