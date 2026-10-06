@@ -23,7 +23,7 @@ export interface PeriodicElement {
 }
 
 export const periodicElements: PeriodicElement[] = [
-  { z: 1, symbol: 'H', mass: 1.008, group: 1, period: 1, name: { ru: 'Водород', kz: 'Суотек' }, category: 'nonmetal' },
+  { z: 1, symbol: 'H', mass: 1.008, group: 1, period: 1, name: { ru: 'Водород', kz: 'Сутек' }, category: 'nonmetal' },
   { z: 2, symbol: 'He', mass: 4.0026, group: 18, period: 1, name: { ru: 'Гелий', kz: 'Гелий' }, category: 'noble' },
   { z: 3, symbol: 'Li', mass: 6.94, group: 1, period: 2, name: { ru: 'Литий', kz: 'Литий' }, category: 'alkali' },
   { z: 4, symbol: 'Be', mass: 9.0122, group: 2, period: 2, name: { ru: 'Бериллий', kz: 'Бериллий' }, category: 'alkaline' },
@@ -55,7 +55,7 @@ export const periodicElements: PeriodicElement[] = [
   { z: 30, symbol: 'Zn', mass: 65.38, group: 12, period: 4, name: { ru: 'Цинк', kz: 'Цинк' }, category: 'transition' },
   { z: 31, symbol: 'Ga', mass: 69.723, group: 13, period: 4, name: { ru: 'Галлий', kz: 'Галлий' }, category: 'post-transition' },
   { z: 32, symbol: 'Ge', mass: 72.63, group: 14, period: 4, name: { ru: 'Германий', kz: 'Германий' }, category: 'metalloid' },
-  { z: 33, symbol: 'As', mass: 74.922, group: 15, period: 4, name: { ru: 'Мышьяк', kz: 'Мышьяк' }, category: 'metalloid' },
+  { z: 33, symbol: 'As', mass: 74.922, group: 15, period: 4, name: { ru: 'Мышьяк', kz: 'Күшән' }, category: 'metalloid' },
   { z: 34, symbol: 'Se', mass: 78.971, group: 16, period: 4, name: { ru: 'Селен', kz: 'Селен' }, category: 'nonmetal' },
   { z: 35, symbol: 'Br', mass: 79.904, group: 17, period: 4, name: { ru: 'Бром', kz: 'Бром' }, category: 'halogen' },
   { z: 36, symbol: 'Kr', mass: 83.798, group: 18, period: 4, name: { ru: 'Криптон', kz: 'Криптон' }, category: 'noble' },
@@ -73,7 +73,7 @@ export const periodicElements: PeriodicElement[] = [
   { z: 48, symbol: 'Cd', mass: 112.41, group: 12, period: 5, name: { ru: 'Кадмий', kz: 'Кадмий' }, category: 'transition' },
   { z: 49, symbol: 'In', mass: 114.82, group: 13, period: 5, name: { ru: 'Индий', kz: 'Индий' }, category: 'post-transition' },
   { z: 50, symbol: 'Sn', mass: 118.71, group: 14, period: 5, name: { ru: 'Олово', kz: 'Қалайы' }, category: 'post-transition' },
-  { z: 51, symbol: 'Sb', mass: 121.76, group: 15, period: 5, name: { ru: 'Сурьма', kz: 'Сурьма' }, category: 'metalloid' },
+  { z: 51, symbol: 'Sb', mass: 121.76, group: 15, period: 5, name: { ru: 'Сурьма', kz: 'Сүрме' }, category: 'metalloid' },
   { z: 52, symbol: 'Te', mass: 127.6, group: 16, period: 5, name: { ru: 'Теллур', kz: 'Теллур' }, category: 'metalloid' },
   { z: 53, symbol: 'I', mass: 126.9, group: 17, period: 5, name: { ru: 'Йод', kz: 'Йод' }, category: 'halogen' },
   { z: 54, symbol: 'Xe', mass: 131.29, group: 18, period: 5, name: { ru: 'Ксенон', kz: 'Ксенон' }, category: 'noble' },

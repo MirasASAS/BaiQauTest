@@ -38,7 +38,7 @@ export const solubilityBases: SolubilitySubstance[] = [
   { formula: 'Fe(OH)₃', name: { ru: 'Гидроксид железа(III)', kz: 'Темір(III) гидроксиді' }, value: 'N' },
   { formula: 'Cu(OH)₂', name: { ru: 'Гидроксид меди', kz: 'Мыс гидроксиді' }, value: 'N' },
   { formula: 'Zn(OH)₂', name: { ru: 'Гидроксид цинка', kz: 'Цинк гидроксиді' }, value: 'N' },
-  { formula: 'AgOH', name: { ru: 'Гидроксид серебра', kz: 'Күміс гидроксиді' }, value: 'N' },
+  { formula: 'AgOH', name: { ru: 'Гидроксид серебра', kz: 'Күміс гидроксиді' }, value: 'D' },
   { formula: 'Pb(OH)₂', name: { ru: 'Гидроксид свинца', kz: 'Қорғасын гидроксиді' }, value: 'N' },
 ];
 
@@ -83,10 +83,10 @@ export const solubilityAnions: SolubilityAnion[] = [
   },
   {
     id: 'OH', label: 'OH⁻', name: { ru: 'Гидроксид', kz: 'Гидроксид' },
-    values: { K: 'R', Na: 'R', NH4: 'R', Ca: 'M', Mg: 'N', Ba: 'R', Al: 'N', Zn: 'N', Fe2: 'N', Fe3: 'N', Cu: 'N', Ag: 'N', Pb: 'N' },
+    values: { K: 'R', Na: 'R', NH4: 'R', Ca: 'M', Mg: 'N', Ba: 'R', Al: 'N', Zn: 'N', Fe2: 'N', Fe3: 'N', Cu: 'N', Ag: 'D', Pb: 'N' },
   },
   {
     id: 'S', label: 'S²⁻', name: { ru: 'Сульфид', kz: 'Сульфид' },
-    values: { K: 'R', Na: 'R', NH4: 'R', Ca: 'D', Mg: 'D', Ba: 'D', Al: 'D', Zn: 'N', Fe2: 'N', Fe3: 'D', Cu: 'N', Ag: 'N', Pb: 'N' },
+    values: { K: 'R', Na: 'R', NH4: 'R', Ca: 'D', Mg: 'D', Ba: 'R', Al: 'D', Zn: 'N', Fe2: 'N', Fe3: 'D', Cu: 'N', Ag: 'N', Pb: 'N' },
   },
 ];

@@ -1,5 +1,5 @@
 import { supabase } from '../supabase';
-import type { Subject, Variant, Question, TestResult } from '../types';
+import type { Subject, Variant, Question, TestQuestion, TestResult, TestAttempt, ReviewQuestion } from '../types';
 
 // Subjects
 export async function getSubjects(): Promise<Subject[]> {
@@ -92,14 +92,27 @@ export async function getQuestions(): Promise<Question[]> {
   return data || [];
 }
 
-export async function getQuestionsByVariantId(variantId: number): Promise<Question[]> {
-  const { data, error } = await supabase
-    .from('questions')
-    .select('*')
-    .eq('variant_id', variantId)
-    .order('order_num');
+// Вопросы для прохождения теста — без correct_answer (RPC get_test_questions, SQL 08)
+export async function getQuestionsByVariantId(variantId: number): Promise<TestQuestion[]> {
+  const { data, error } = await supabase.rpc('get_test_questions', { p_variant_id: variantId });
   if (error) throw error;
   return data || [];
+}
+
+// Старт (или продолжение) попытки: вопросы без ответов и серверный дедлайн (SQL 09).
+// msLeft посчитан по часам сервера, поэтому не зависит от времени на устройстве.
+export async function startTestAttempt(variantId: number): Promise<{
+  attempt: TestAttempt | null;
+  questions: TestQuestion[];
+  msLeft: number;
+}> {
+  const { data, error } = await supabase.rpc('start_test_attempt', { p_variant_id: variantId });
+  if (error) throw error;
+  const attempt = (data?.attempt ?? null) as TestAttempt | null;
+  const msLeft = attempt
+    ? Math.max(0, new Date(attempt.expires_at).getTime() - new Date(data.server_now).getTime())
+    : 0;
+  return { attempt, questions: (data?.questions || []) as TestQuestion[], msLeft };
 }
 
 export async function getQuestionsByVariantPaginated(
@@ -119,6 +132,34 @@ export async function getQuestionsByVariantPaginated(
   return { questions: data || [], count: count ?? 0 };
 }
 
+// Текст вопроса и вариантов на языке интерфейса: казахский — если он заполнен, иначе основной
+export function localizeQuestion<T extends Pick<TestQuestion, 'question_text' | 'option_a' | 'option_b' | 'option_c' | 'option_d'
+  | 'question_text_kz' | 'option_a_kz' | 'option_b_kz' | 'option_c_kz' | 'option_d_kz'>>(question: T, language: 'kz' | 'ru'): T {
+  if (language !== 'kz') return question;
+  return {
+    ...question,
+    question_text: question.question_text_kz || question.question_text,
+    option_a: question.option_a_kz || question.option_a,
+    option_b: question.option_b_kz || question.option_b,
+    option_c: question.option_c_kz || question.option_c,
+    option_d: question.option_d_kz || question.option_d,
+  };
+}
+
+// Необязательные поля вопроса (SQL 10): перевод, тема, сложность, картинка, объяснение
+export type QuestionExtras = Partial<Pick<Question,
+  'question_text_kz' | 'option_a_kz' | 'option_b_kz' | 'option_c_kz' | 'option_d_kz'
+  | 'topic' | 'difficulty' | 'image_url' | 'explanation_ru' | 'explanation_kz'>>;
+
+// Загрузка картинки вопроса в публичный bucket question-images; возвращает ссылку
+export async function uploadQuestionImage(file: File): Promise<string> {
+  const ext = (file.name.split('.').pop() || 'png').toLowerCase().replace(/[^a-z0-9]/g, '') || 'png';
+  const path = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}.${ext}`;
+  const { error } = await supabase.storage.from('question-images').upload(path, file, { contentType: file.type || undefined });
+  if (error) throw error;
+  return supabase.storage.from('question-images').getPublicUrl(path).data.publicUrl;
+}
+
 export async function createQuestion(question: {
   variant_id: number;
   question_text: string;
@@ -128,7 +169,7 @@ export async function createQuestion(question: {
   option_d: string;
   correct_answer: 'A' | 'B' | 'C' | 'D';
   order_num?: number;
-}): Promise<Question> {
+} & QuestionExtras): Promise<Question> {
   const { data, error } = await supabase
     .from('questions')
     .insert({
@@ -163,7 +204,10 @@ export async function deleteQuestion(id: number, _variantId: number): Promise<vo
 }
 
 // Test Results
-export async function getTestResults(userId: string): Promise<(TestResult & { variants: Variant; subjects: Subject })[]> {
+export type TestResultWithDetails = TestResult & { variants: Variant; subjects: Subject };
+
+// Все попытки ученика, новые сверху
+export async function getAllTestResults(userId: string): Promise<TestResultWithDetails[]> {
   const { data, error } = await supabase
     .from('results')
     .select(`
@@ -179,19 +223,10 @@ export async function getTestResults(userId: string): Promise<(TestResult & { va
     .eq('student_id', userId)
     .order('taken_at', { ascending: false });
   if (error) throw error;
-
-  // Keep only the most recent attempt per variant (no duplicates)
-  const latestByVariant = new Map<number, typeof data[number]>();
-  (data || []).forEach(r => {
-    const existing = latestByVariant.get(r.variant_id);
-    if (!existing || new Date(r.taken_at ?? 0) > new Date(existing.taken_at ?? 0)) {
-      latestByVariant.set(r.variant_id, r);
-    }
-  });
-  const unique = [...latestByVariant.values()];
+  const rows = data || [];
 
   // Get subjects for each result
-  const subjectIds = [...new Set(unique?.map(r => r.variants?.subject_id).filter((v): v is number => typeof v === 'number'))];
+  const subjectIds = [...new Set(rows.map(r => r.variants?.subject_id).filter((v): v is number => typeof v === 'number'))];
   let subjects: Subject[] = [];
   if (subjectIds.length > 0) {
     const { data: subjectsData } = await supabase
@@ -201,10 +236,28 @@ export async function getTestResults(userId: string): Promise<(TestResult & { va
     subjects = subjectsData || [];
   }
 
-  return (unique || []).map(r => ({
+  return rows.map(r => ({
     ...r,
-    subjects: subjects?.find(s => s.id === r.variants?.subject_id) ?? null,
-  })) as (TestResult & { variants: Variant; subjects: Subject })[];
+    subjects: subjects.find(s => s.id === r.variants?.subject_id) ?? null,
+  })) as TestResultWithDetails[];
+}
+
+// Только последняя попытка каждого варианта (для статистики на дашборде)
+export async function getTestResults(userId: string): Promise<TestResultWithDetails[]> {
+  const all = await getAllTestResults(userId);
+  const seen = new Set<number>();
+  return all.filter(r => {
+    if (seen.has(r.variant_id)) return false;
+    seen.add(r.variant_id);
+    return true;
+  });
+}
+
+// Разбор своей попытки: результат с ответами ученика + вопросы с ключом (RPC get_result_review, SQL 09)
+export async function getResultReview(resultId: number): Promise<{ result: TestResult; questions: ReviewQuestion[] }> {
+  const { data, error } = await supabase.rpc('get_result_review', { p_result_id: resultId });
+  if (error) throw error;
+  return { result: data.result as TestResult, questions: (data.questions || []) as ReviewQuestion[] };
 }
 
 export async function getTestResultByVariant(userId: string, variantId: number): Promise<TestResult | null> {
@@ -233,43 +286,22 @@ function withTimeout<T>(promise: Promise<T>, ms = 15000): Promise<T> {
   });
 }
 
+export type AnswerKey = Record<string, Question['correct_answer'] | null>;
+
+// Сдача теста: балл считает сервер (RPC submit_test_result, SQL 08).
+// answers: {question_id: 'A'|'B'|'C'|'D'}; в ответ — результат и ключ правильных ответов.
 export async function saveTestResult(result: {
-  student_id: string;
   variant_id: number;
-  score: number;
-  total_score: number;
-  answers?: Record<string, string>;
-}): Promise<TestResult> {
+  answers: Record<string, string>;
+}): Promise<{ result: TestResult; answerKey: AnswerKey }> {
   return withTimeout((async () => {
-    // 1-жол: submit_test_result RPC (SQL 05 орнатылғанда — қауіпсіз, серверлік тексеру)
     const { data, error } = await supabase.rpc('submit_test_result', {
-      p_student_id: result.student_id,
       p_variant_id: result.variant_id,
-      p_score: result.score,
-      p_total_score: result.total_score,
-      p_answers: result.answers || null,
+      p_answers: result.answers,
     });
-    if (error) {
-      // RPC жоқ болса (SQL әлі орнатылмаған) — тікелей insert (fallback)
-      const isMissingRpc = error.code === 'PGRST202' || /could not find the function/i.test(error.message || '');
-      if (!isMissingRpc) throw error;
-      const { data: insertData, error: insertError } = await supabase
-        .from('results')
-        .insert({
-          student_id: result.student_id,
-          variant_id: result.variant_id,
-          score: result.score,
-          total_score: result.total_score,
-          answers: result.answers || null,
-        })
-        .select()
-        .single();
-      if (insertError) throw insertError;
-      return insertData as TestResult;
-    }
-    const row = Array.isArray(data) ? data[0] : data;
-    if (!row) throw new Error('submit_test_result returned no row');
-    return row as TestResult;
+    if (error) throw error;
+    if (!data?.result) throw new Error('submit_test_result returned no row');
+    return { result: data.result as TestResult, answerKey: (data.answer_key || {}) as AnswerKey };
   })());
 }
 

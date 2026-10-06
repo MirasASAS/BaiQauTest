@@ -38,7 +38,24 @@ export interface Question {
   correct_answer: 'A' | 'B' | 'C' | 'D';
   score: number;
   order_num: number;
+  // question_text / option_* — русский (основной) текст; *_kz — казахский, может отсутствовать (SQL 10)
+  question_text_kz?: string | null;
+  option_a_kz?: string | null;
+  option_b_kz?: string | null;
+  option_c_kz?: string | null;
+  option_d_kz?: string | null;
+  topic?: string | null;
+  difficulty?: 1 | 2 | 3 | null;
+  image_url?: string | null;
+  explanation_ru?: string | null;
+  explanation_kz?: string | null;
 }
+
+// Вопрос в том виде, в каком его получает ученик: правильный ответ
+// приходит с сервера только после сдачи теста.
+export type TestQuestion = Omit<Question, 'correct_answer'> & {
+  correct_answer?: Question['correct_answer'] | null;
+};
 
 export interface TestResult {
   id: number;
@@ -48,7 +65,25 @@ export interface TestResult {
   total_score: number;
   taken_at: string;
   answers?: Record<string, string> | null;
+  attempt_id?: number | null;
+  // false — попытка сохранена, но в рейтинг не идёт (пересдача или сдано после дедлайна)
+  is_ranked?: boolean;
+  duration_seconds?: number | null;
 }
+
+// Серверная попытка теста: дедлайн задаёт сервер (RPC start_test_attempt, SQL 09)
+export interface TestAttempt {
+  id: number;
+  student_id: string;
+  variant_id: number;
+  status: 'open' | 'submitted' | 'expired';
+  started_at: string;
+  expires_at: string;
+  submitted_at: string | null;
+}
+
+// Вопрос в разборе сданной попытки: с ключом и сохранённым объяснением
+export type ReviewQuestion = Question;
 
 export interface User {
   id: string;

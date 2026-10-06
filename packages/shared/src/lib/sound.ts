@@ -38,6 +38,12 @@ function tone(freq: number, start: number, duration: number, type: OscillatorTyp
   osc.stop(audioCtx.currentTime + start + duration + 0.05);
 }
 
+// Короткий нейтральный щелчок — выбор ответа (во время теста верность неизвестна)
+export function playSelect() {
+  if (!isSoundEnabled()) return;
+  tone(520, 0, 0.08, 'sine', 0.1);
+}
+
 // Два коротких восходящих тона — правильный ответ
 export function playCorrect() {
   if (!isSoundEnabled()) return;
