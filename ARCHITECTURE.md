@@ -58,7 +58,7 @@ packages/shared/
 └── locales/{kz,ru}/             # common, subjects, test, results, profile, admin, import
 supabase/
 ├── 00…11_*.sql                  # схема; запускаются вручную в SQL Editor по порядку
-├── functions/ai-chat, ai-import # Edge Functions (Deno)
+├── functions/ai-chat, ai-import, send-reminders # Edge Functions (Deno)
 └── migrations/                  # старая история, для нового проекта НЕ используется
 ```
 
@@ -88,11 +88,35 @@ Dashboard → предмет → варианты
 
 ### Геймификация
 ```
-results → get_user_streak   (дни подряд)
-results → get_user_badges   (COUNT DISTINCT variant, 90%+)
-results → get_leaderboard   (последняя попытка на вариант, топ-10) / get_my_rank
+results → get_user_streak   (дни подряд, по времени Алматы)
+results → get_user_badges   (COUNT DISTINCT variant, 90%+, победитель / призёр недели)
+results → get_leaderboard   (зачётные попытки, сумма баллов, топ-10) / get_my_rank
+results → weekly_awards     (топ-3 завершённой недели; подводится при открытии рейтинга,
+                             get_last_week_winners)
 ```
 Заблокированные пользователи в лидерборд не попадают.
+
+### Типы вопросов и полный ЕНТ
+```
+questions.question_type: single | multiple (варианты A–F, ключ ["A","C"]) |
+                         matching (match_left + ключ {"1":"B"}); passages — общий текст
+score_answer(вопрос, ответ) — единственное место подсчёта на сервере
+(зеркало для показа результата — packages/shared/src/lib/answers.ts)
+
+start_full_exam(профильные предметы) → exam_sessions: обязательные предметы + 2 профильных,
+                                        общий дедлайн, вопросы по разделам без ключей
+submit_full_exam → по строке results на каждый раздел (exam_session_id),
+                   поэтому история, рейтинг, темы и работа над ошибками работают без изменений
+```
+
+### Возврат ученика
+```
+вход: email / Google / SMS — кнопки показываются по auth/v1/settings проекта
+ИИ-чат: ai_chats + ai_chat_messages (пишет приложение ученика под своим RLS)
+PWA: manifest + public/sw.js (оболочка сайта, без кэша данных)
+напоминания: push_subscriptions ← save_push_subscription
+             pg_cron → send-reminders → get_streak_reminder_targets → web-push
+```
 
 ### ИИ
 ```
@@ -111,15 +135,19 @@ results → get_leaderboard   (последняя попытка на вариа
 | Trigger | `make_first_user_admin` | первый пользователь → admin |
 | Trigger | `auto_confirm_user_email` | авто-подтверждение email |
 | Trigger | `protect_profile_fields` | не-админ не может менять role / is_blocked |
-| Trigger | `validate_result_score` | score ≤ total_score = число вопросов варианта |
+| Trigger | `validate_result_score` | score ≤ total_score = сумма баллов вопросов варианта |
 | Trigger | `results_blocked_check` | заблокированный не может писать результаты |
-| Trigger | `sync_variant_total_score` | variants.total_score = число вопросов |
+| Trigger | `sync_variant_total_score` + `variants_force_total_score` | variants.total_score = сумма баллов вопросов, клиент подменить не может |
+| Trigger | `questions_set_score` | балл вопроса по типу: 1 / 2 / число пар |
 | RPC | `is_admin()` | SECURITY DEFINER — база для проверок RLS |
 | RPC | `start_test_attempt` | старт/продолжение попытки: вопросы без `correct_answer` и дедлайн |
 | RPC | `get_result_review` | разбор своей попытки: вопросы с ключом и ответы ученика |
 | RPC | `get_question_for_explain` | вопрос для объяснения ИИ (только после сдачи варианта) |
 | RPC | `get_my_topic_stats` | статистика ученика по предметам и темам (по первым попыткам) |
 | RPC | `submit_test_result` | серверный подсчёт балла + ключ ответов |
+| RPC | `get_full_exam_options` / `start_full_exam` / `submit_full_exam` | полный ЕНТ из нескольких предметов |
+| RPC | `get_last_week_winners` | топ-3 прошлой недели (заодно подводит итоги недели) |
+| RPC | `save_push_subscription` / `get_streak_reminder_targets` | push-напоминания (вторая — только service role) |
 | RPC | `publish_import_questions` | транзакционная публикация импорта |
 | RPC | `admin_list_users` / `admin_set_user_role` / `admin_toggle_block` / `admin_platform_stats` | админка |
 | RLS | все таблицы | доступ по ролям; `questions` напрямую читает только админ |
@@ -140,6 +168,8 @@ results → get_leaderboard   (последняя попытка на вариа
 | `09_attempts_and_fair_ranking.sql` | серверные попытки с таймером, рейтинг по первой попытке (`results.is_ranked`), недельный лидерборд, streak по Алматы, разбор ответов, `questions.explanation_*` |
 | `10_bilingual_content.sql` | казахский текст вопроса (`*_kz`), тема, сложность, картинка (bucket `question-images`), публикация импорта с обоими языками, статистика по темам |
 | `11_mistakes_practice.sql` | «работа над ошибками»: `get_my_mistakes`, `record_mistake_practice`, таблица `mistake_practice` |
+| `12_question_types_and_full_ent.sql` | типы вопросов (несколько ответов, соответствие), контекстные тексты, баллы как на ЕНТ, полный ЕНТ (`exam_sessions`) |
+| `13_retention.sql` | профиль при входе через Google / телефон, награды недели, история ИИ-чата, push-подписки |
 
 ## 6. Конфигурация
 
@@ -149,6 +179,8 @@ VITE_SUPABASE_URL=
 VITE_SUPABASE_ANON_KEY=
 # только admin, необязательно: auto | gemini | mock
 VITE_AI_PROVIDER=auto
+# только student, необязательно: публичный VAPID-ключ для push-напоминаний
+VITE_VAPID_PUBLIC_KEY=
 ```
 
 Секреты Edge Functions (`supabase secrets set …`):
@@ -157,20 +189,28 @@ GEMINI_API_KEY=
 DEEPSEEK_API_KEY=
 DEEPSEEK_MODEL=deepseek-v4-flash-vision-exp      # необязательно
 DEEPSEEK_BASE_URL=https://api.b.ai/v1            # необязательно
+# send-reminders (нужны только для push-напоминаний)
+VAPID_PUBLIC_KEY=
+VAPID_PRIVATE_KEY=
+VAPID_SUBJECT=mailto:you@example.com
+CRON_SECRET=
 ```
 
 ## 7. Известные ограничения
 
-- После первой сдачи ученик видит ключ ответов варианта и может пересдать его на 100%
-  (в лидерборд идёт последняя попытка).
+- После первой сдачи ученик видит ключ ответов варианта; пересдача сохраняется, но в рейтинг не идёт.
+- Импорт из файлов создаёт только вопросы с одним ответом; вопросы «несколько ответов»,
+  «соответствие» и контекстные тексты добавляются вручную в форме вопроса.
+- В полном ЕНТ раздел — это целый вариант предмета: число вопросов в разделе равно числу
+  вопросов варианта, а не фиксированным 20 / 10 / 10 / 40 / 40.
 - `ai-import` не ограничен по числу запросов (доступен только админам).
 - Парсинг файлов импорта идёт в браузере; сканы PDF требуют OCR и не поддерживаются.
 
 ## 8. Направление развития
 
 ```
-├─ 1. Тесты: форматы ЕНТ (несколько правильных ответов, соответствие), разделы
-├─ 2. Лидерборд по первой попытке / банк случайных вопросов против заучивания ключа
+├─ 1. Импорт вопросов новых типов из файлов
+├─ 2. Банк случайных вопросов против заучивания ключа
 ├─ 3. Масштаб: 1000+ вопросов → разделы (sections), категории
 └─ 4. Аналитика: Radar-график по предметам, динамика результатов
 ```

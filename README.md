@@ -26,7 +26,7 @@ npm run dev:admin      # админка
 
 ## Настройка Supabase
 
-1. В SQL Editor выполнить по порядку файлы `supabase/00_…sql` — `supabase/11_…sql`.
+1. В SQL Editor выполнить по порядку файлы `supabase/00_…sql` — `supabase/13_…sql`.
 2. Задеплоить функции и задать ключи ИИ:
    ```bash
    supabase functions deploy ai-chat
@@ -34,6 +34,19 @@ npm run dev:admin      # админка
    supabase secrets set GEMINI_API_KEY=... DEEPSEEK_API_KEY=...
    ```
 3. Первый зарегистрированный пользователь автоматически становится админом.
+
+Необязательные возможности (без них приложение работает, соответствующие кнопки просто не показываются):
+
+- **Вход через Google / по телефону** — включить провайдер в Authentication → Providers
+  (для Google нужен OAuth-клиент, для телефона — SMS-провайдер) и добавить адрес сайта в
+  Authentication → URL Configuration. Кнопки входа появятся сами.
+- **Push-напоминания про серию** — создать ключи `npx web-push generate-vapid-keys`, публичный
+  записать в `VITE_VAPID_PUBLIC_KEY` приложения ученика, затем:
+  ```bash
+  supabase functions deploy send-reminders --no-verify-jwt
+  supabase secrets set VAPID_PUBLIC_KEY=... VAPID_PRIVATE_KEY=... VAPID_SUBJECT=mailto:you@example.com CRON_SECRET=...
+  ```
+  и включить расписание — блок в конце `supabase/13_retention.sql`.
 
 Ключи ИИ хранятся только в секретах Supabase — в `.env` приложений их быть не должно.
 
