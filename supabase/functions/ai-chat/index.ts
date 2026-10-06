@@ -43,6 +43,8 @@ interface RequestBody {
 
 const SUBJECT_LABELS: Record<string, { kz: string; ru: string }> = {
   math: { kz: 'Математика', ru: 'Математика' },
+  math_literacy: { kz: 'Математикалық сауаттылық', ru: 'Математическая грамотность' },
+  reading_literacy: { kz: 'Оқу сауаттылығы', ru: 'Грамотность чтения' },
   informatics: { kz: 'Информатика', ru: 'Информатика' },
   kazakhstan_history: { kz: 'Қазақстан тарихы', ru: 'История Казахстана' },
   world_history: { kz: 'Дүниежүзі тарихы', ru: 'Всемирная история' },
@@ -100,47 +102,60 @@ interface ExplainQuestion {
   option_b_kz?: string | null;
   option_c_kz?: string | null;
   option_d_kz?: string | null;
-  correct_answer: string;
+  correct_answer: string | null;
   subject: string;
+  // Типы вопросов (SQL 12); до него сервер этих полей не присылает
+  question_type?: 'single' | 'multiple' | 'matching';
+  option_e?: string | null;
+  option_f?: string | null;
+  option_e_kz?: string | null;
+  option_f_kz?: string | null;
+  correct_key?: string[] | Record<string, string> | null;
+  match_left?: { ru: string; kz?: string | null }[] | null;
+  passage?: { text_ru: string; text_kz?: string | null } | null;
 }
 
 function explainPrompt(source: ExplainQuestion, language: Language): string {
   const subject = SUBJECT_LABELS[source.subject]?.[language] || source.subject;
+  const kz = language === 'kz';
   // Для казахского объяснения берём казахский текст вопроса, если он заполнен
-  const q = language === 'kz'
-    ? {
-        ...source,
-        question_text: source.question_text_kz || source.question_text,
-        option_a: source.option_a_kz || source.option_a,
-        option_b: source.option_b_kz || source.option_b,
-        option_c: source.option_c_kz || source.option_c,
-        option_d: source.option_d_kz || source.option_d,
-      }
-    : source;
-  if (language === 'kz') {
-    return `ҰБТ тест сұрағы. Пән: ${subject}.
+  const pick = (main?: string | null, translated?: string | null) => (kz && translated ? translated : main) || '';
+  const options = [
+    ['A', pick(source.option_a, source.option_a_kz)],
+    ['B', pick(source.option_b, source.option_b_kz)],
+    ['C', pick(source.option_c, source.option_c_kz)],
+    ['D', pick(source.option_d, source.option_d_kz)],
+    ['E', pick(source.option_e, source.option_e_kz)],
+    ['F', pick(source.option_f, source.option_f_kz)],
+  ].filter(([, text]) => text).map(([letter, text]) => `${letter}) ${text}`).join('\n');
+  const passage = source.passage ? pick(source.passage.text_ru, source.passage.text_kz).slice(0, 6000) : '';
+  const head = (kz ? `ҰБТ тест сұрағы. Пән: ${subject}.` : `Тестовый вопрос ЕНТ. Предмет: ${subject}.`)
+    + (passage ? `\n\n${kz ? 'Мәтін' : 'Текст'}:\n${passage}` : '')
+    + `\n\n${kz ? 'Сұрақ' : 'Вопрос'}: ${pick(source.question_text, source.question_text_kz)}`;
+  const audience = kz
+    ? 'Оқушыға тікелей жүгінбе — түсіндірме барлық оқушыларға көрсетіледі.'
+    : 'Не обращайся к ученику лично: объяснение увидят все ученики.';
 
-Сұрақ: ${q.question_text}
-A) ${q.option_a}
-B) ${q.option_b}
-C) ${q.option_c}
-D) ${q.option_d}
-
-Дұрыс жауап: ${q.correct_answer}
-
-Неге ${q.correct_answer} дұрыс жауап екенін қысқаша түсіндір, содан кейін қалған нұсқалардың неге қате екенін бір-бір сөйлеммен айт. Оқушыға тікелей жүгінбе — түсіндірме барлық оқушыларға көрсетіледі.`;
+  if (source.question_type === 'matching' && source.correct_key && !Array.isArray(source.correct_key)) {
+    const key = source.correct_key;
+    const left = (source.match_left || []).map((item, i) => `${i + 1}. ${pick(item.ru, item.kz)}`).join('\n');
+    const pairs = Object.keys(key).sort().map(k => `${k} — ${key[k]}`).join(', ');
+    return kz
+      ? `${head}\n\nТұжырымдар:\n${left}\n\nНұсқалар:\n${options}\n\nДұрыс сәйкестік: ${pairs}\n\nӘр жұптың неге дұрыс екенін бір-екі сөйлеммен түсіндір. ${audience}`
+      : `${head}\n\nУтверждения:\n${left}\n\nВарианты:\n${options}\n\nВерное соответствие: ${pairs}\n\nОбъясни одной-двумя фразами, почему верна каждая пара. ${audience}`;
   }
-  return `Тестовый вопрос ЕНТ. Предмет: ${subject}.
 
-Вопрос: ${q.question_text}
-A) ${q.option_a}
-B) ${q.option_b}
-C) ${q.option_c}
-D) ${q.option_d}
+  if (source.question_type === 'multiple' && Array.isArray(source.correct_key)) {
+    const correct = [...source.correct_key].sort().join(', ');
+    return kz
+      ? `${head}\n${options}\n\nБірнеше дұрыс жауап бар. Дұрыс жауаптар: ${correct}\n\nӘр дұрыс нұсқаның неге дұрыс екенін қысқаша түсіндір, содан кейін қалған нұсқалардың неге қате екенін бір-бір сөйлеммен айт. ${audience}`
+      : `${head}\n${options}\n\nВерных ответов несколько. Правильные ответы: ${correct}\n\nКратко объясни, почему верен каждый из них, затем одной фразой про каждый из остальных вариантов — почему он неверный. ${audience}`;
+  }
 
-Правильный ответ: ${q.correct_answer}
-
-Кратко объясни, почему ${q.correct_answer} — правильный ответ, затем одной фразой про каждый из остальных вариантов — почему он неверный. Не обращайся к ученику лично: объяснение увидят все ученики.`;
+  const correct = source.correct_answer;
+  return kz
+    ? `${head}\n${options}\n\nДұрыс жауап: ${correct}\n\nНеге ${correct} дұрыс жауап екенін қысқаша түсіндір, содан кейін қалған нұсқалардың неге қате екенін бір-бір сөйлеммен айт. ${audience}`
+    : `${head}\n${options}\n\nПравильный ответ: ${correct}\n\nКратко объясни, почему ${correct} — правильный ответ, затем одной фразой про каждый из остальных вариантов — почему он неверный. ${audience}`;
 }
 
 interface TopicStat {
