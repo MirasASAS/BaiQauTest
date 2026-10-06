@@ -47,6 +47,7 @@ export interface ImportQuestion {
   option_c_kz: string | null;
   option_d_kz: string | null;
   correct_answer: 'A' | 'B' | 'C' | 'D' | null;
+  topic?: string | null;
   confidence: number;
   needs_review: boolean;
   is_duplicate: boolean;
@@ -71,6 +72,8 @@ export interface ProcessedQuestion {
   options_ru: { A: string; B: string; C: string; D: string };
   options_kz: { A: string; B: string; C: string; D: string };
   correct_answer: 'A' | 'B' | 'C' | 'D' | null;
+  // Тема вопроса, которую определил AI (2–4 слова на русском); null — не определена
+  topic?: string | null;
   confidence: number;
   needs_review: boolean;
   is_duplicate: boolean;
@@ -92,6 +95,7 @@ export interface AIQuestionResult {
   options_ru?: AIOptions;
   options_kz?: AIOptions;
   correct_answer?: 'A' | 'B' | 'C' | 'D';
+  topic?: string;
   confidence?: number;
   needs_review?: boolean;
   is_duplicate?: boolean;

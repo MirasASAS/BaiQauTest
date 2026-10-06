@@ -565,6 +565,7 @@ function EditQuestionModal({ question, onClose, onSaved }: {
     options_ru: { A: question.option_a_ru || '', B: question.option_b_ru || '', C: question.option_c_ru || '', D: question.option_d_ru || '' },
     options_kz: { A: question.option_a_kz || '', B: question.option_b_kz || '', C: question.option_c_kz || '', D: question.option_d_kz || '' },
     correct_answer: question.correct_answer || 'A',
+    topic: question.topic || '',
   });
   const [saving, setSaving] = useState(false);
 
@@ -576,6 +577,7 @@ function EditQuestionModal({ question, onClose, onSaved }: {
       option_a_ru: form.options_ru.A, option_b_ru: form.options_ru.B, option_c_ru: form.options_ru.C, option_d_ru: form.options_ru.D,
       option_a_kz: form.options_kz.A, option_b_kz: form.options_kz.B, option_c_kz: form.options_kz.C, option_d_kz: form.options_kz.D,
       correct_answer: form.correct_answer as 'A' | 'B' | 'C' | 'D',
+      topic: form.topic.trim() || null,
       needs_review: false,
       status: 'draft',
     });
@@ -616,6 +618,10 @@ function EditQuestionModal({ question, onClose, onSaved }: {
               className="px-3 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#2563eb]/20" />
           ))}
         </div>
+
+        <label className="block text-sm font-medium text-gray-700 mb-1">{t('topic')}</label>
+        <input value={form.topic} onChange={e => setForm({ ...form, topic: e.target.value })} maxLength={80}
+          className="w-full px-3 py-2 bg-gray-50 border border-gray-200 rounded-xl text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-[#2563eb]/20" />
 
         <label className="block text-sm font-medium text-gray-700 mb-1.5">{t('correctAnswer')}</label>
         <div className="flex gap-2 mb-5">
